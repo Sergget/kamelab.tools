@@ -12,6 +12,15 @@ Environment=LAB_TOOLS_HOST=0.0.0.0
 Environment=LAB_TOOLS_PORT=8000
 Environment=LAB_TOOLS_DATA_DIR=/opt/lab-tools/backend/data
 Environment=LAB_TOOLS_TTL_HOURS=2
+# 文档转换：OCR 节点地址与身份
+Environment=LAB_TOOLS_OCR_NODE_URL=http://127.0.0.1:8001
+Environment=LAB_TOOLS_OCR_NODE_NAME=win11
+Environment=LAB_TOOLS_OCR_NODE_ROLE=heavy
+# 节点身份
+Environment=LAB_TOOLS_NODE_NAME=%H
+Environment=LAB_TOOLS_NODE_ROLE=main
+# 启用工具（逗号分隔，留空则全部启用）
+Environment=LAB_TOOLS_ENABLED=
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true

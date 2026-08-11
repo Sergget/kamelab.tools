@@ -51,3 +51,38 @@ export async function splitFile(fileId, options) {
 export function splitDownloadUrl(jobId) {
   return `/api/tools/excel-split/download/${jobId}`
 }
+
+export async function convertDocument(file, { output_format = 'md', crop = '' } = {}) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('output_format', output_format)
+  if (crop) form.append('crop', crop)
+  try {
+    const { data } = await http.post('/tools/doc-convert/convert', form)
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}
+
+export function docConvertDownloadUrl(jobId) {
+  return `/api/tools/doc-convert/download/${jobId}`
+}
+
+export async function getDocConvertHealth() {
+  try {
+    const { data } = await http.get('/tools/doc-convert/health')
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}
+
+export async function getDocConvertFormats() {
+  try {
+    const { data } = await http.get('/tools/doc-convert/supported-formats')
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}

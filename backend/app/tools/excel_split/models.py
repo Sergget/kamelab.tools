@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class SplitRequest(BaseModel):
+    sheet: Optional[str] = Field(None, description="要拆分的 sheet 名称；为空表示拆分所有 sheet")
     split_column: str = Field(..., description="用于拆分的表头名称")
     keep_columns: Optional[List[str]] = Field(None, description="输出文件中保留的列；为空表示全部保留")
     filename_template: str = Field(

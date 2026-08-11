@@ -16,6 +16,12 @@ const router = createRouter({
       meta: { title: 'Excel 表格拆分' },
     },
     {
+      path: '/tools/doc-convert',
+      name: 'doc-convert',
+      component: () => import('../views/DocConvertView.vue'),
+      meta: { title: '文档转换' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

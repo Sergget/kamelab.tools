@@ -61,9 +61,16 @@
     </div>
 
     <!-- 步骤 3：拆分配置 -->
-    <div v-if="fileId && allColumns.length" class="card">
+    <div v-if="fileId" class="card">
       <div class="card-title"><el-icon><Setting /></el-icon>3. 拆分配置</div>
       <el-form label-width="130px" label-position="left">
+        <el-form-item label="拆分 sheet" required>
+          <el-select v-model="config.sheet" placeholder="选择要拆分的 sheet" style="width: 320px" @change="onSplitSheetChange">
+            <el-option v-for="s in fileInfo.sheets" :key="s.name" :label="`${s.name}（${s.rows} 行）`" :value="s.name" />
+          </el-select>
+          <div class="muted" style="margin-left: 12px">仅拆分所选 sheet 的数据</div>
+        </el-form-item>
+
         <el-form-item label="拆分列" required>
           <el-select v-model="config.split_column" placeholder="选择用于拆分的表头" style="width: 320px">
             <el-option v-for="c in allColumns" :key="c" :label="c" :value="c" />
@@ -150,6 +157,7 @@ const activeSheet = ref('')
 const preview = reactive({ headers: [], rows: [], total: 0 })
 
 const config = reactive({
+  sheet: '',
   split_column: '',
   keep_columns: [],
   output_mode: 'separate',
@@ -170,17 +178,8 @@ const placeholders = [
 
 const allColumns = computed(() => {
   if (!fileInfo.value) return []
-  const seen = new Set()
-  const cols = []
-  for (const s of fileInfo.value.sheets) {
-    for (const h of s.headers || []) {
-      if (!seen.has(h)) {
-        seen.add(h)
-        cols.push(h)
-      }
-    }
-  }
-  return cols
+  const s = fileInfo.value.sheets.find((x) => x.name === config.sheet)
+  return s ? [...(s.headers || [])] : []
 })
 
 function insertPlaceholder(key) {
@@ -195,6 +194,7 @@ async function doUpload({ file }) {
     fileInfo.value = data
     fileId.value = data.file_id
     activeSheet.value = data.sheets[0]?.name || ''
+    config.sheet = data.sheets[0]?.name || ''
     await loadPreview(0)
     ElMessage.success(`上传成功：${data.file_name}`)
   } catch (e) {
@@ -216,7 +216,17 @@ async function changeSheet() {
   await loadPreview(0)
 }
 
+function onSplitSheetChange() {
+  config.split_column = ''
+  config.keep_columns = []
+  keepAll.value = true
+}
+
 async function doSplit() {
+  if (!config.sheet) {
+    ElMessage.warning('请选择要拆分的 sheet')
+    return
+  }
   if (!config.split_column) {
     ElMessage.warning('请选择拆分列')
     return
@@ -247,6 +257,7 @@ function reset() {
   fileInfo.value = null
   fileId.value = ''
   result.value = null
+  config.sheet = ''
   config.split_column = ''
   config.keep_columns = []
   keepAll.value = true

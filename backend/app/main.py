@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from . import config, temp_files
-from .tools import TOOLS
+from .tools import enabled_tools
+from .tools.doc_convert.router import router as doc_convert_router
 from .tools.excel_split.router import router as excel_split_router
 
 
@@ -30,7 +31,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(excel_split_router)
+# 根据配置的 ENABLED_TOOLS 条件挂载路由
+if config.ENABLED_TOOLS is None or "excel-split" in config.ENABLED_TOOLS:
+    app.include_router(excel_split_router)
+if config.ENABLED_TOOLS is None or "doc-convert" in config.ENABLED_TOOLS:
+    app.include_router(doc_convert_router)
 
 
 @app.get("/api/health")
@@ -40,7 +45,7 @@ async def health():
 
 @app.get("/api/tools")
 async def list_tools():
-    return TOOLS
+    return enabled_tools()
 
 
 if config.STATIC_DIR.exists():

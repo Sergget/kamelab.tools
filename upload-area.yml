@@ -1,0 +1,18 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - link "Lab Tools" [ref=e5] [cursor=pointer]:
+      - /url: /
+    - generic [ref=e10]: 办公文件处理工具箱
+  - main [ref=e11]:
+    - generic [ref=e34]:
+      - generic [ref=e35]:
+        - button "返回" [ref=e36] [cursor=pointer]
+        - heading "文档转换" [level=2] [ref=e41]
+      - generic [ref=e42]:
+        - generic [ref=e43]: 1. 上传文件
+        - generic [ref=e47]:
+          - button [ref=e48] [cursor=pointer]:
+            - generic [ref=e53]:
+              - text: 将文件拖到此处，或
+              - emphasis [ref=e54]: 点击上传
+          - generic [ref=e55]: 支持 office 文档 / 图片 / PDF 等，单个文件不超过 50MB；图片与 PDF 支持预览后裁剪识别

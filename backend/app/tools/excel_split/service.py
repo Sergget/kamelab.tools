@@ -206,6 +206,11 @@ def split_workbook(sheets: Dict[str, pd.DataFrame], req: SplitRequest,
     if req.output_mode not in ("separate", "workbook"):
         raise ExcelSplitError(f"不支持的输出模式: {req.output_mode}")
 
+    if req.sheet:
+        if req.sheet not in sheets:
+            raise ExcelSplitError(f"sheet 不存在: {req.sheet}")
+        sheets = {req.sheet: sheets[req.sheet]}
+
     per_sheet_groups: List[Tuple[str, str, pd.DataFrame]] = []
     for sheet_name, df in sheets.items():
         groups, _ = _collect_sheet_groups(df, req, sheet_name)

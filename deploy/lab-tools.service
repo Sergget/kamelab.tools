@@ -1,0 +1,24 @@
+[Unit]
+Description=Lab Tools Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=labtools
+Group=labtools
+WorkingDirectory=/opt/lab-tools/backend
+ExecStart=/opt/lab-tools/backend/.venv/bin/python run.py
+Environment=LAB_TOOLS_HOST=0.0.0.0
+Environment=LAB_TOOLS_PORT=8000
+Environment=LAB_TOOLS_DATA_DIR=/opt/lab-tools/backend/data
+Environment=LAB_TOOLS_TTL_HOURS=2
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/lab-tools/backend/data
+
+[Install]
+WantedBy=multi-user.target

@@ -155,10 +155,14 @@ deploy_backend() {
 # ============================================================
 deploy_frontend() {
     echo ">>> [frontend] 构建前端并放置静态产物"
-    # 自动加载 nvm 中的 node（若 nvm 已安装但环境未激活）
-    if [ -s "${HOME}/.nvm/nvm.sh" ]; then
+    # 自动加载 nvm 中的 node（sudo 运行时 HOME=/root，需回退到原用户家目录）
+    NVM_HOME="${HOME}"
+    if [ -n "${SUDO_USER:-}" ] && [ -d "/home/${SUDO_USER}/.nvm" ]; then
+        NVM_HOME="/home/${SUDO_USER}"
+    fi
+    if [ -s "${NVM_HOME}/.nvm/nvm.sh" ]; then
         # shellcheck disable=SC1091
-        . "${HOME}/.nvm/nvm.sh" >/dev/null 2>&1
+        NVM_DIR="${NVM_HOME}/.nvm" . "${NVM_HOME}/.nvm/nvm.sh" >/dev/null 2>&1
     fi
     # 依赖检查：需要 node + npm（脚本不再自动安装，缺失时仅警告并跳过）
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then

@@ -13,7 +13,7 @@ Environment=LAB_TOOLS_PORT=8000
 Environment=LAB_TOOLS_DATA_DIR=/var/www/lab-tools/backend/data
 Environment=LAB_TOOLS_TTL_HOURS=2
 # 文档转换：OCR 节点地址与身份（按部署环境修改）
-Environment=LAB_TOOLS_OCR_NODE_URL=http://127.0.0.1:8001
+Environment=LAB_TOOLS_OCR_NODE_URL=http://192.168.0.81:8001
 Environment=LAB_TOOLS_OCR_NODE_NAME=win11
 Environment=LAB_TOOLS_OCR_NODE_ROLE=heavy
 # 节点身份

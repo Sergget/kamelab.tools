@@ -88,9 +88,16 @@ fi
 # need <name>：判断某组件是否需要部署（all 模式下全部为真）
 need() { [ -n "${PARTS[all]:-}" ] || [ -n "${PARTS[$1]:-}" ]; }
 
+# ---- 修复数据目录（service 的 ReadWritePaths 指向 data/，缺失会导致启动失败）----
+fix_up() {
+    echo ">>> [fixup] 确保数据目录存在并归 ${SERVICE_USER} 属主"
+    sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${BACKEND_DIR}/data"
+}
+
 # ---- 重启服务（backend / service 部署后调用，使改动生效）----
 restart_service() {
-    if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}.service"; then
+    fix_up
+    if [ -f "${SYSTEMD_DEST}" ]; then
         sudo systemctl daemon-reload
         sudo systemctl enable --now "$SERVICE_NAME" 2>/dev/null || true
         sudo systemctl restart "$SERVICE_NAME"
@@ -148,6 +155,11 @@ deploy_backend() {
 # ============================================================
 deploy_frontend() {
     echo ">>> [frontend] 构建前端并放置静态产物"
+    # 自动加载 nvm 中的 node（若 nvm 已安装但环境未激活）
+    if [ -s "${HOME}/.nvm/nvm.sh" ]; then
+        # shellcheck disable=SC1091
+        . "${HOME}/.nvm/nvm.sh" >/dev/null 2>&1
+    fi
     # 依赖检查：需要 node + npm（脚本不再自动安装，缺失时仅警告并跳过）
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
         echo "Warning: 未找到 node 或 npm，跳过 frontend 组件（请先安装 Node 20+）" >&2
@@ -188,11 +200,6 @@ deploy_service() {
     fi
     # 单元文件变化后必须 daemon-reload，再重启服务生效
     restart_service
-}
-# --- 修复数据目录权限问题（部署完成后统一创建 data 目录并设置属主） ---
-fix_up() {
-    echo ">>> [fixup] 确保数据目录存在并归 ${SERVICE_USER} 属主"
-    sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${BACKEND_DIR}/data"
 }
 
 # ============================================================

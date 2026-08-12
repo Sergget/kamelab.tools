@@ -100,7 +100,8 @@ function Test-ServiceExists {
     return $LASTEXITCODE -eq 0
 }
 
-$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$deployDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $deployDir
 $ocrRoot = Join-Path $repoRoot "ocr_server"
 
 if (-not $PythonExe) {

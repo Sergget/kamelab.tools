@@ -4,15 +4,15 @@ After=network.target
 
 [Service]
 Type=simple
-User=labtools
-Group=labtools
-WorkingDirectory=/opt/lab-tools/backend
-ExecStart=/opt/lab-tools/backend/.venv/bin/python run.py
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/lab-tools/backend
+ExecStart=/var/www/lab-tools/backend/.venv/bin/python run.py
 Environment=LAB_TOOLS_HOST=0.0.0.0
 Environment=LAB_TOOLS_PORT=8000
-Environment=LAB_TOOLS_DATA_DIR=/opt/lab-tools/backend/data
+Environment=LAB_TOOLS_DATA_DIR=/var/www/lab-tools/backend/data
 Environment=LAB_TOOLS_TTL_HOURS=2
-# 文档转换：OCR 节点地址与身份
+# 文档转换：OCR 节点地址与身份（按部署环境修改）
 Environment=LAB_TOOLS_OCR_NODE_URL=http://127.0.0.1:8001
 Environment=LAB_TOOLS_OCR_NODE_NAME=win11
 Environment=LAB_TOOLS_OCR_NODE_ROLE=heavy
@@ -27,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/lab-tools/backend/data
+ReadWritePaths=/var/www/lab-tools/backend/data
 
 [Install]
 WantedBy=multi-user.target

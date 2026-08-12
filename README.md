@@ -46,11 +46,32 @@ cd backend
 
 ## 部署（Ubuntu Server）
 
+服务器需预装 **Node 20+** 与 **Python 3.10+**（脚本不再自动安装；依赖缺失时仅打印警告并跳过对应组件，不中断部署）。
+
+全量部署（后端 + 前端 + systemd 服务 + Nginx 反代）：
+
 ```bash
 sudo bash ./deploy_ubuntu.sh
 ```
 
-脚本会：安装 Node 20 / Python 依赖 → 构建前端 → 以 `labtools` 用户 + systemd 部署 `/opt/lab-tools`（默认端口 **8000**）→ 健康检查通过后提示完成。
+也可按组件单独部署：
+
+```bash
+sudo bash ./deploy_ubuntu.sh backend    # 只更新后端并重启服务
+sudo bash ./deploy_ubuntu.sh frontend   # 只重新构建前端产物（无需重启）
+sudo bash ./deploy_ubuntu.sh service    # 只更新 systemd 单元并重启
+sudo bash ./deploy_ubuntu.sh nginx      # 只更新 Nginx 配置并 reload
+```
+
+部署结构：
+
+- 代码与运行环境：`/var/www/lab-tools`（backend/ 代码 + `.venv` 虚拟环境 + data 数据目录），以 `www-data` 用户运行 systemd 服务 `lab-tools`，内部端口 **8000**
+- 反向代理：Nginx 将 `https://lab.sergget.qzz.io` 代理到 `127.0.0.1:8000`（配置见 `deploy/lab-tools.conf`，域名与 SSL 证书按需修改）
+
+配置修改位置（直接编辑文件后重跑对应组件即可生效）：
+
+- `deploy/lab-tools.service`：端口、OCR 节点地址（`LAB_TOOLS_OCR_NODE_URL`）、启用工具等 → `sudo bash ./deploy_ubuntu.sh service`
+- `deploy/lab-tools.conf`：域名、SSL、上传大小限制等 → `sudo bash ./deploy_ubuntu.sh nginx`
 
 服务管理：
 
@@ -59,7 +80,12 @@ systemctl status lab-tools
 journalctl -u lab-tools -f
 ```
 
-自定义端口：`LAB_TOOLS_PORT=9000 sudo bash ./deploy_ubuntu.sh`
+验证：
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl https://lab.sergget.qzz.io/api/health
+```
 
 ## 环境变量（后端）
 

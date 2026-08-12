@@ -6,8 +6,9 @@ Lab Tools OCR 节点（Windows）部署管理脚本。
 使用 NSSM (Non-Sucking Service Manager) 将 ocr_server 注册为 Windows 系统服务，
 并支持服务状态的查询、启动、停止、卸载，以及注册开机自启计划任务。
 
-部署完成后，在 Ubuntu 主节点上用 --ocr-url 指向本机即可接入：
-    sudo bash ./deploy_ubuntu.sh backend --ocr-url http://<本机IP>:8001
+部署完成后，在 Ubuntu 主节点上编辑 deploy/lab-tools.service 的
+LAB_TOOLS_OCR_NODE_URL 指向本机即可接入，然后执行：
+    sudo bash ./deploy_ubuntu.sh service
 
 .PARAMETER Action
 要执行的操作（默认 install）：
@@ -320,4 +321,5 @@ Write-Host "  nssm edit `"$ServiceName`""
 Write-Host "  nssm remove `"$ServiceName`""
 Write-Host ""
 Write-Host "Ubuntu 主节点接入（将 <本机IP> 替换为本机局域网 IP）："
-Write-Host "  sudo bash ./deploy_ubuntu.sh backend --ocr-url http://<本机IP>:$Port"
+Write-Host "  编辑 deploy/lab-tools.service 中 LAB_TOOLS_OCR_NODE_URL 为 http://<本机IP>:$Port 后执行："
+Write-Host "  sudo bash ./deploy_ubuntu.sh service"

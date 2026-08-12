@@ -189,6 +189,11 @@ deploy_service() {
     # 单元文件变化后必须 daemon-reload，再重启服务生效
     restart_service
 }
+# --- 修复数据目录权限问题（部署完成后统一创建 data 目录并设置属主） ---
+fix_up() {
+    echo ">>> [fixup] 确保数据目录存在并归 ${SERVICE_USER} 属主"
+    sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${BACKEND_DIR}/data"
+}
 
 # ============================================================
 #  组件 4：Nginx 反向代理配置

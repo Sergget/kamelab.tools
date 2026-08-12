@@ -1,4 +1,4 @@
-<#!
+﻿<#!
 .SYNOPSIS
 Lab Tools OCR 节点（Windows）部署管理脚本。
 
@@ -245,9 +245,12 @@ Write-Info "Starting Windows OCR service deployment..."
 if (Test-ServiceExists -Name $ServiceName) {
     Write-Warn "Service $ServiceName already exists. Reinstalling it..."
     cmd /c "nssm stop $ServiceName >nul 2>&1"
+    Start-Sleep -Seconds 2
     cmd /c "nssm remove $ServiceName confirm >nul 2>&1"
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to remove existing service $ServiceName."
+        Write-Warn "First remove attempt failed, retrying after delay..."
+        Start-Sleep -Seconds 3
+        cmd /c "nssm remove $ServiceName confirm >nul 2>&1"
     }
 }
 
@@ -268,7 +271,7 @@ $envExtra = @(
     "PYTHONIOENCODING=utf-8",
     "PYTHONUNBUFFERED=1",
     "LANG=zh_CN.UTF-8"
-) -join " "
+) -join "`n"
 
 Write-Info "Configuring service settings..."
 & nssm set $ServiceName AppDirectory $ocrRoot

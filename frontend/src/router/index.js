@@ -22,6 +22,12 @@ const router = createRouter({
       meta: { title: '文档转换' },
     },
     {
+      path: '/tools/excel-diff',
+      name: 'excel-diff',
+      component: () => import('../views/ExcelDiffView.vue'),
+      meta: { title: 'Excel 表格比对' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

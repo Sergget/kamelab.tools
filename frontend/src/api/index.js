@@ -86,3 +86,29 @@ export async function getDocConvertFormats() {
     throw messageError(e)
   }
 }
+
+// ---- Excel 表格比对（excel-diff）----
+
+export async function uploadExcelDiff(file) {
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const { data } = await http.post('/tools/excel-diff/upload', form)
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}
+
+export async function compareExcel(payload) {
+  try {
+    const { data } = await http.post('/tools/excel-diff/compare', payload)
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}
+
+export function excelDiffDownloadUrl(jobId) {
+  return `/api/tools/excel-diff/download/${jobId}`
+}

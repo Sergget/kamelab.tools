@@ -22,6 +22,14 @@ TOOLS = [
         "route": "/tools/doc-convert",
         "keywords": ["docx", "pdf", "ocr", "markdown", "转换", "图片", "扫描", "扫描件"],
     },
+    {
+        "id": "excel-diff",
+        "name": "Excel 表格比对",
+        "description": "上传基准表与比对表，按指定键列匹配、可选值列，输出差异明细表或在表格中高亮差异。",
+        "icon": "Files",
+        "route": "/tools/excel-diff",
+        "keywords": ["excel", "xlsx", "xls", "比对", "对比", "差异", "diff", "高亮", "表格"],
+    },
 ]
 
 

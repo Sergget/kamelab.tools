@@ -11,8 +11,6 @@ from fastapi.responses import FileResponse
 
 from . import config, temp_files
 from .tools import enabled_tools
-from .tools.doc_convert.router import router as doc_convert_router
-from .tools.excel_split.router import router as excel_split_router
 
 
 @asynccontextmanager
@@ -31,11 +29,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 根据配置的 ENABLED_TOOLS 条件挂载路由
+# 根据配置的 ENABLED_TOOLS 条件挂载路由（惰性导入：缺失某工具的依赖不影响其它工具启动）
 if config.ENABLED_TOOLS is None or "excel-split" in config.ENABLED_TOOLS:
+    from .tools.excel_split.router import router as excel_split_router
+
     app.include_router(excel_split_router)
 if config.ENABLED_TOOLS is None or "doc-convert" in config.ENABLED_TOOLS:
+    from .tools.doc_convert.router import router as doc_convert_router
+
     app.include_router(doc_convert_router)
+if config.ENABLED_TOOLS is None or "excel-diff" in config.ENABLED_TOOLS:
+    from .tools.excel_diff.router import router as excel_diff_router
+
+    app.include_router(excel_diff_router)
 
 
 @app.get("/api/health")

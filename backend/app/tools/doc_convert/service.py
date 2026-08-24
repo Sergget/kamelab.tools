@@ -869,7 +869,36 @@ def convert_local(file_bytes: bytes, filename: str, ext: str,
 
 # ---- OCR 转换 ----
 def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, Any]:
-    """图片/扫描 PDF → OCR 节点；节点不可达时降级本地 PaddleOCR。"""
+    """图片/扫描 PDF → OCR。优先本地；配置了 OCR 节点且可达时转发。"""
+    # 本地优先模式：直接使用本地 PaddleOCR，不探测外部节点
+    if config.OCR_USE_LOCAL:
+        logger.info("本地 OCR 模式，直接使用本地 PaddleOCR: %s", filename)
+        ext = Path(filename).suffix.lower()
+        file_type = "pdf" if ext == PDF_EXTENSION else "image"
+        try:
+            result = _do_ocr_local(file_bytes, ext, file_type)
+            resp = {
+                "success": True,
+                "filename": filename,
+                "content": result["text"],
+                "engine": "paddleocr_cpu_local",
+                "routed_to": "local_ocr",
+                "pages": result["pages"],
+                "lines": result["lines"],
+                "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
+            }
+            _apply_layout_reconstruction(resp)
+            return resp
+        except Exception as exc:
+            logger.error("本地 OCR 转换失败: %s", exc)
+            if ext == PDF_EXTENSION:
+                try:
+                    return convert_local(file_bytes, filename, ext, t_start)
+                except Exception:
+                    pass
+            raise DocConvertError(f"本地 OCR 失败: {exc}", 503)
+
+    # 兼容模式：尝试外部 OCR 节点，不可达时降级本地
     ocr_node_up = check_ocr_node() is not None
     if not ocr_node_up:
         logger.info("OCR 节点不可达，降级为本地 OCR 识别: %s", filename)

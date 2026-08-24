@@ -17,6 +17,9 @@ ALLOWED_EXTENSIONS = {".xlsx", ".xls"}
 CONVERT_MAX_MB = int(os.getenv("LAB_TOOLS_CONVERT_MAX_MB", "50"))
 OCR_NODE_URL = os.getenv("LAB_TOOLS_OCR_NODE_URL", "http://127.0.0.1:8001")
 OCR_TIMEOUT = int(os.getenv("LAB_TOOLS_OCR_TIMEOUT", "120"))
+OCR_USE_LOCAL = os.getenv(
+    "LAB_TOOLS_OCR_USE_LOCAL", "false"
+).strip().lower() not in ("false", "0", "no", "")
 PDF_TEXT_THRESHOLD = int(os.getenv("LAB_TOOLS_PDF_TEXT_THRESHOLD", "50"))
 CROP_PDF_ZOOM = float(os.getenv("LAB_TOOLS_CROP_PDF_ZOOM", "2.0"))
 PANDOC_TIMEOUT = int(os.getenv("LAB_TOOLS_PANDOC_TIMEOUT", "30"))

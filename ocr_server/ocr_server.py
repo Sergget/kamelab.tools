@@ -1,5 +1,8 @@
+import gc
 import io
 import os
+import shutil
+import socket
 import sys
 import time
 import threading
@@ -44,7 +47,7 @@ import psutil
 # 配置 —— 全部来自环境变量，和 Ubuntu 端保持一致
 # =============================================================================
 
-NODE_NAME = os.environ.get("NODE_NAME", "win11")
+NODE_NAME = os.environ.get("NODE_NAME", socket.gethostname())
 NODE_ROLE = os.environ.get("NODE_ROLE", "heavy")
 PORT = int(os.environ.get("PORT", 5000))
 
@@ -74,25 +77,14 @@ PDF_EXTENSIONS = {".pdf"}
 START_TIME = time.time()
 
 # =============================================================================
-# GPU / OCR 模式 —— 硬编码说明
+# GPU / OCR 模式 —— 动态探测
 # =============================================================================
-# 2026-07-11: 切换到 paddlepaddle==2.6.2 (CPU 版本)，移除所有 GPU/CUDA 依赖。
-#
-# 原因：GTX 960 是 Maxwell 架构 (Compute Capability 5.2)，PaddlePaddle GPU
-# wheel 只包含 sm_61 (Pascal) 及以上架构的 kernel。升级 GPU 前 GPU 加速不可用。
-#
-# paddlepaddle-cpu 的优势：
-#   - 不加载任何 CUDA DLL → Session 0 (Windows 服务/NSSM) 完全安全
-#   - CUDA Toolkit 11.8 已卸载，节省磁盘空间
-#   - 功能与识别精度与 GPU 版本完全一致（仅速度不同）
-#
-# 如果未来升级到 Pascal+ 显卡（如 GTX 1060）：
-#   1. pip install paddlepaddle-gpu==2.6.2（替换 CPU 版本）
-#   2. 将 use_gpu 改为 True
-#   3. 安装对应版本的 CUDA Toolkit
+# 本机（win10）为 Pentium G3260 + 核显，无 NVIDIA 独立显卡，OCR 永远跑 CPU。
+# GPU 探测改为动态：有 nvidia-smi 才认为有 GPU（仅用于 /health 展示）。
+# 若未来换装 Pascal(CC 6.1)+ 显卡，可换 paddlepaddle-gpu 并把 use_gpu 改 True。
 
-GPU_AVAILABLE = True   # nvidia-smi 可见 GPU（仅显示输出用）
-GPU_USABLE = False     # Maxwell CC 5.2，GPU 加速不可用
+GPU_AVAILABLE = shutil.which("nvidia-smi") is not None  # 仅展示输出用
+GPU_USABLE = False     # CPU 模式（无独立显卡 / 架构不兼容时均如此）
 OCR_MODE = "cpu"       # 永久 CPU 模式
 
 # =============================================================================
@@ -148,20 +140,30 @@ def record_conversion_metrics(success: bool, elapsed_ms: float):
 
 
 # =============================================================================
-# PaddleOCR 延迟初始化（单例，CPU 模式）
+# PaddleOCR 延迟初始化 + 空闲自动卸载（单例，CPU 模式）
 # =============================================================================
 # 不在 import 时加载模型 —— 首次 /convert 请求触发初始化，避免常驻吃内存。
-# 加载后保持常驻（不卸载），后续请求直接复用。
+# 加载后常驻复用；空闲超过 OCR_IDLE_UNLOAD_SEC 秒自动卸载模型释放内存，
+# 下次请求再重新加载（CPU 模式下重载约需 5~15 秒）。
+# 通过环境变量 OCR_IDLE_UNLOAD_SEC 调整（0 = 永不卸载），默认 900 秒。
 
 _ocr_instance = None
 _ocr_init_lock = threading.Lock()
 _ocr_init_error = None     # 记录初始化失败的原因，后续请求直接返回错误
+_ocr_last_used = 0.0       # 最近一次使用时间戳（用于空闲卸载）
+
+OCR_IDLE_UNLOAD_SEC = int(os.environ.get("OCR_IDLE_UNLOAD_SEC", "900"))
+
+
+def _touch_ocr():
+    """记录"引擎刚刚被使用"，重置空闲计时。"""
+    global _ocr_last_used
+    _ocr_last_used = time.time()
 
 
 def get_ocr():
     """
     获取 PaddleOCR 单例。首次调用时初始化模型（会下载模型文件）。
-    GTX 960 架构不兼容 GPU，永久使用 CPU 模式（use_gpu=False）。
     初始化失败时会记录错误，后续调用直接复用 None，避免反复尝试。
     """
     global _ocr_instance, _ocr_init_error
@@ -180,28 +182,55 @@ def get_ocr():
             return None
 
         try:
-            from paddleocr import PaddleOCR
+            from rapidocr_onnxruntime import RapidOCR
 
-            app.logger.info("[ocr_server] 正在初始化 PaddleOCR（首次加载模型，CPU 模式）...")
-            app.logger.info("[ocr_server]   模型: PP-OCRv4 mobile 系列")
-            app.logger.info("[ocr_server]   语言: ch（中文）")
-            app.logger.info("[ocr_server]   方向分类: 关闭（use_angle_cls=False，节省内存）")
-            app.logger.info("[ocr_server]   设备: CPU（GTX 960 Maxwell CC 5.2 不支持 GPU 加速）")
+            app.logger.info("[ocr_server] 正在初始化 RapidOCR（ONNXRuntime CPU 推理）...")
+            app.logger.info("[ocr_server]   模型: PP-OCRv4 mobile 系列（ONNX 版）")
+            app.logger.info("[ocr_server]   设备: CPU（本机 CPU 不支持 AVX，无法运行 paddlepaddle）")
 
-            _ocr_instance = PaddleOCR(
-                lang="ch",
-                use_angle_cls=False,       # 关闭方向分类，节省内存
-                use_gpu=False,              # GTX 960 永久 CPU 模式
-            )
-
-            app.logger.info("[ocr_server] PaddleOCR 初始化完成（CPU 模式）")
+            _ocr_instance = RapidOCR()
+            _touch_ocr()
+            app.logger.info("[ocr_server] RapidOCR 初始化完成（CPU 模式，内存占用远低于 PaddlePaddle）")
             return _ocr_instance
 
         except Exception as e:
             _ocr_init_error = str(e)
-            app.logger.error(f"[ocr_server] PaddleOCR 初始化失败: {e}")
+            app.logger.error(f"[ocr_server] OCR 引擎初始化失败: {e}")
             app.logger.error(traceback.format_exc())
             return None
+
+
+def _unload_ocr_if_idle():
+    """空闲超时则卸载 OCR 实例并回收内存。由后台守护线程周期调用。"""
+    global _ocr_instance
+    if OCR_IDLE_UNLOAD_SEC <= 0 or _ocr_instance is None:
+        return
+    idle = time.time() - _ocr_last_used
+    if idle < OCR_IDLE_UNLOAD_SEC:
+        return
+    with _ocr_init_lock:
+        if _ocr_instance is None:
+            return
+        idle = time.time() - _ocr_last_used
+        if idle < OCR_IDLE_UNLOAD_SEC:
+            return
+        app.logger.info(
+            "[ocr_server] OCR 引擎已空闲 %.0fs（阈值 %ss），卸载模型释放内存",
+            idle, OCR_IDLE_UNLOAD_SEC,
+        )
+        _ocr_instance = None
+        gc.collect()
+        app.logger.info("[ocr_server] 卸载完成，内存已回收（下次请求将自动重新加载）")
+
+
+def _idle_unloader_loop():
+    """守护线程：每 60 秒检查一次是否需要卸载空闲的 OCR 引擎。"""
+    while True:
+        time.sleep(60)
+        try:
+            _unload_ocr_if_idle()
+        except Exception as e:
+            app.logger.warning("[ocr_server] 空闲卸载检查失败: %s", e)
 
 # Global ThreadPoolExecutor for OCR tasks
 ocr_executor = ThreadPoolExecutor(max_workers=1)
@@ -284,6 +313,9 @@ def health():
         "gpu_available": GPU_AVAILABLE,
         "gpu_usable": GPU_USABLE,
         "ocr_mode": OCR_MODE,
+        "ocr_loaded": _ocr_instance is not None,
+        "idle_unload_sec": OCR_IDLE_UNLOAD_SEC,
+        "idle_seconds": round(time.time() - _ocr_last_used, 1) if _ocr_instance is not None else None,
         "metrics": {
             "total_success_count": success_cnt,
             "total_fail_count": fail_cnt,
@@ -302,33 +334,36 @@ def health_gpu():
     # GPU 基本信息（型号、显存、驱动）
     info = _get_gpu_display_info()
 
-    # GPU 兼容性（硬编码，原因见文件顶部注释）
+    # GPU 兼容性（动态探测）
     info["gpu_available"] = GPU_AVAILABLE
     info["gpu_usable"] = GPU_USABLE
     info["gpu_arch_warning"] = (
-        "GTX 960 是 Maxwell 架构 (CC 5.2)，PaddlePaddle 2.6.2 预编译 wheel "
-        "只支持 sm_61 (Pascal) 及以上。GPU 加速永久不可用，OCR 运行在 CPU 模式。"
+        "本节点无可用 NVIDIA 独立显卡（或架构不兼容 PaddlePaddle GPU kernel），"
+        "OCR 固定运行在 CPU 模式。"
+    ) if not GPU_AVAILABLE else (
+        "检测到 nvidia-smi，但当前使用 paddlepaddle CPU 版，GPU 加速未启用。"
     )
 
     # 实时显存使用
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.used,memory.free,utilization.gpu",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            parts = [p.strip() for p in result.stdout.strip().split(",")]
-            if len(parts) >= 3:
-                info["vram_used_mb"] = int(float(parts[0]))
-                info["vram_free_mb"] = int(float(parts[1]))
-                info["gpu_util_pct"] = int(float(parts[2]))
-    except Exception as e:
-        app.logger.warning(f"Failed to get GPU memory/utilization from nvidia-smi: {e}")
-        info["vram_used_mb"] = None
-        info["vram_free_mb"] = None
-        info["gpu_util_pct"] = None
+    if GPU_AVAILABLE:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=memory.used,memory.free,utilization.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = [p.strip() for p in result.stdout.strip().split(",")]
+                if len(parts) >= 3:
+                    info["vram_used_mb"] = int(float(parts[0]))
+                    info["vram_free_mb"] = int(float(parts[1]))
+                    info["gpu_util_pct"] = int(float(parts[2]))
+        except Exception as e:
+            app.logger.warning(f"Failed to get GPU memory/utilization from nvidia-smi: {e}")
+            info["vram_used_mb"] = None
+            info["vram_free_mb"] = None
+            info["gpu_util_pct"] = None
 
     # OCR 引擎状态
     info["ocr_loaded"] = _ocr_instance is not None
@@ -348,7 +383,7 @@ def supported_formats():
     return jsonify({
         "node": NODE_NAME,
         "role": NODE_ROLE,
-        "engine": "paddleocr_cpu",
+        "engine": "rapidocr_cpu",
         "formats": sorted(IMAGE_EXTENSIONS | PDF_EXTENSIONS),
         "max_file_size_mb": MAX_FILE_SIZE_MB,
         "max_pdf_pages": MAX_PDF_PAGES,
@@ -471,7 +506,7 @@ def convert_document():
         "success": True,
         "filename": file.filename,
         "content": result["text"],
-        "engine": "paddleocr_cpu",
+        "engine": "rapidocr_cpu",
         "pages": result["pages"],
         "elapsed_ms": elapsed_ms,
     }
@@ -495,9 +530,10 @@ def _do_ocr(file_bytes, ext, file_type, original_filename):
     ocr = get_ocr()
     if ocr is None:
         raise RuntimeError("OCR engine is not initialized")
+    _touch_ocr()
 
     if file_type == "image":
-        # 图片：PIL 解码 → numpy array → PaddleOCR
+        # 图片：PIL 解码 → numpy array → OCR
         from PIL import Image
         import numpy as np
 
@@ -507,7 +543,7 @@ def _do_ocr(file_bytes, ext, file_type, original_filename):
             img = img.convert("RGB")
         img_array = np.array(img)
 
-        raw_result = ocr.ocr(img_array, cls=False)
+        raw_result, _elapse = ocr(img_array)
         # 单页图片不需要 page 字段（下游只有多页 PDF 场景才需要区分页码）
         page_lines = _extract_lines(raw_result)
         text = _lines_to_text(page_lines)
@@ -549,7 +585,7 @@ def _do_ocr(file_bytes, ext, file_type, original_filename):
                 img = img.convert("RGB")
             img_array = np.array(img)
 
-            raw_result = ocr.ocr(img_array, cls=False)
+            raw_result, _elapse = ocr(img_array)
             # 多页场景：每行标上 1-indexed 页码，方便下游按页重建版面
             page_lines = _extract_lines(raw_result, page_num=page_num + 1)
             page_text = _lines_to_text(page_lines)
@@ -563,54 +599,44 @@ def _do_ocr(file_bytes, ext, file_type, original_filename):
         pages = page_count
         app.logger.info(f"Finished processing PDF: {original_filename} with {pages} pages")
 
+    _touch_ocr()
     return {"text": text, "pages": pages, "lines": all_lines}
 
 
 def _extract_lines(ocr_result, page_num=None):
     """
-    从 PaddleOCR 的原始输出中提取结构化行信息（文字 + bbox 坐标 + 置信度）。
+    从 RapidOCR 的原始输出中提取结构化行信息（文字 + bbox 坐标 + 置信度）。
 
-    PaddleOCR 2.7 返回格式：
+    RapidOCR 返回格式（无文字时为 None 或 []）：
     [
-        [   # 第一张图的识别结果
-            [[[x1,y1],[x2,y2],[x3,y3],[x4,y4]], ('识别文字', confidence)],
-            ...
-        ]
+        [[x1,y1],[x2,y2],[x3,y3],[x4,y4]], ('识别文字', confidence),
+        ...
     ]
-    如果没有检测到文字，可能返回 [None] 或 [[]]。
+    注意：与 PaddleOCR 不同，RapidOCR 是扁平列表且 text/confidence 不打包成 tuple。
 
     返回 list[dict]，每个 dict 形如：
         {"text": "识别出的文字", "bbox": [[x1,y1],...,[x4,y4]], "confidence": 0.98}
     若传入 page_num，则每个 dict 额外带上 "page": page_num（1-indexed），
     用于多页 PDF 场景下游按页区分行。bbox 坐标是渲染图片的像素坐标，不做归一化。
     """
-    if ocr_result is None:
-        return []
-
-    # ocr_result 是一个 list，每个元素对应一张输入图
-    if len(ocr_result) == 0:
-        return []
-
-    page_result = ocr_result[0]
-
-    if page_result is None:
+    if not ocr_result:
         return []
 
     lines = []
-    for item in page_result:
-        if item is None:
+    for item in ocr_result:
+        if item is None or len(item) < 3:
             continue
         try:
-            # item = [bbox_list, (text, confidence)]
-            bbox_raw, (text, confidence) = item
-            if not text or not text.strip():
+            # item = [bbox_list, text, confidence]
+            bbox_raw, text, confidence = item[0], item[1], item[2]
+            if not text or not str(text).strip():
                 continue
 
             # numpy 类型不能直接 json.dumps，统一转成原生 float
             bbox = [[round(float(x), 1), round(float(y), 1)] for x, y in bbox_raw]
 
             line = {
-                "text": text,
+                "text": str(text),
                 "bbox": bbox,
                 "confidence": round(float(confidence), 4),
             }
@@ -636,7 +662,7 @@ def _lines_to_text(lines):
 @app.route("/", methods=["GET"])
 def index():
     return jsonify({
-        "service": "Win11 Heavy OCR Service (阶段 3)",
+        "service": "Lab Tools OCR Node Service",
         "node": NODE_NAME,
         "role": NODE_ROLE,
         "endpoints": {
@@ -646,7 +672,7 @@ def index():
             "/convert":            "POST — OCR 文档转换（multipart/form-data, field: file）",
         },
         "supported_formats": sorted(IMAGE_EXTENSIONS | PDF_EXTENSIONS),
-        "engine": "PaddleOCR CPU (PP-OCRv4 mobile, GTX 960 CC 5.2 不支持 GPU)",
+        "engine": "RapidOCR CPU (PP-OCRv4 mobile ONNX)",
     }), 200
 
 
@@ -656,10 +682,10 @@ def index():
 
 if __name__ == "__main__":
     app.logger.info("=" * 60)
-    app.logger.info(f"  Win11 重型 OCR 服务")
+    app.logger.info(f"  Lab Tools OCR 服务")
     app.logger.info(f"  节点: {NODE_NAME}  角色: {NODE_ROLE}  端口: {PORT}")
-    app.logger.info(f"  引擎: PaddlePaddle 2.6.2 CPU（paddlepaddle-cpu）")
-    app.logger.info(f"  OCR 模式: CPU（永久 — GTX 960 Maxwell CC 5.2）")
+    app.logger.info(f"  引擎: RapidOCR CPU（PP-OCRv4 mobile ONNX）")
+    app.logger.info(f"  OCR 模式: CPU（永久）")
     app.logger.info("=" * 60)
 
     # 显示 GPU 基本信息（仅展示用）
@@ -668,13 +694,20 @@ if __name__ == "__main__":
         app.logger.info(f"  GPU: {gpu_info['gpu_name']} | "
               f"显存: {gpu_info.get('gpu_memory_mb', '?')} MB | "
               f"驱动: {gpu_info.get('driver_version', '?')}")
-        app.logger.info("  GPU 加速: 不可用（Maxwell CC 5.2 < 需要 CC 6.1+ Pascal）")
+        app.logger.info("  GPU 加速: 未启用（当前为 ONNXRuntime CPU 推理）")
     else:
         app.logger.info("  GPU: 未检测到 nvidia-smi（不影响服务）")
-    app.logger.info("  CUDA Toolkit: 无需安装（paddlepaddle-cpu 不依赖 CUDA）")
+    app.logger.info("  推理后端: onnxruntime（无 paddle/CUDA 依赖）")
 
     app.logger.info(f"  /convert 端点将在首次请求时延迟加载 OCR 模型")
-    app.logger.info(f"  /supported_formats 端点已就绪（供调度器动态发现）")
+    if OCR_IDLE_UNLOAD_SEC > 0:
+        app.logger.info(f"  空闲 {OCR_IDLE_UNLOAD_SEC}s 后自动卸载模型释放内存（下次请求重新加载）")
+    else:
+        app.logger.info(f"  模型加载后常驻不卸载（OCR_IDLE_UNLOAD_SEC=0）")
+
+    # 后台守护线程：周期检查空闲卸载
+    threading.Thread(target=_idle_unloader_loop, daemon=True).start()
+
     app.logger.info(f"服务启动，监听 0.0.0.0:{PORT} ...")
     app.logger.info("=" * 60)
 

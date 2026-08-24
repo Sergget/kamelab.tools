@@ -1,0 +1,29 @@
+# =============================================================================
+# Win10 OCR 节点依赖（RapidOCR / ONNXRuntime 方案）
+# =============================================================================
+# 环境说明：
+#   - Python 3.11（.venv）
+#   - 本机 CPU（Pentium G3260）不支持 AVX 指令集，paddlepaddle 官方已停止
+#     提供 noavx 安装包 → 无法运行 PaddlePaddle。
+#   - 改用 RapidOCR：PP-OCRv4 mobile 模型的 ONNX 版本，onnxruntime CPU 推理，
+#     不要求 AVX，内存占用约为 PaddlePaddle 的一半，初始化更快。
+#   - 无 NVIDIA 独立显卡。
+#
+# 常驻内存优化：
+#   - OCR 引擎首次 /convert 请求时才加载（懒加载）
+#   - 空闲 OCR_IDLE_UNLOAD_SEC 秒（默认 900s）后自动卸载模型释放内存
+#
+# 部署：NSSM 注册为 Windows 服务（deploy/deploy_windows.ps1）
+
+flask
+flask-cors
+psutil
+
+# ---- OCR 引擎 ----
+rapidocr_onnxruntime
+
+# ---- PDF 渲染（扫描件逐页转图）----
+PyMuPDF>=1.25.0
+
+# ---- 图片处理 ----
+Pillow

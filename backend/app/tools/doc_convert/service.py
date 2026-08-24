@@ -900,6 +900,21 @@ def markdown_to_docx_bytes(markdown_text: str) -> Tuple[bytes, str]:
 
 
 # ---- 本地转换（纯 Python 提取）----
+def convert_pdf_text(file_bytes: bytes, filename: str,
+                     t_start: float) -> Dict[str, Any]:
+    """文本型 PDF：pdftotext 全文提取（-layout 保留版面）。"""
+    proc = _run_poppler("pdftotext", ["-layout"], file_bytes)
+    return {
+        "success": True,
+        "filename": filename,
+        "file_size_mb": round(len(file_bytes) / (1024 * 1024), 2),
+        "content": proc.stdout.decode("utf-8", errors="ignore").strip(),
+        "engine": "pdftotext",
+        "routed_to": "local",
+        "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
+    }
+
+
 def convert_local(file_bytes: bytes, filename: str, ext: str,
                   t_start: float) -> Dict[str, Any]:
     try:
@@ -943,7 +958,7 @@ def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, A
             logger.error("本地 OCR 转换失败: %s", exc)
             if ext == PDF_EXTENSION:
                 try:
-                    return convert_local(file_bytes, filename, ext, t_start)
+                    return convert_pdf_text(file_bytes, filename, t_start)
                 except Exception:
                     pass
             raise DocConvertError(f"本地 OCR 失败: {exc}", 503)
@@ -972,7 +987,7 @@ def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, A
             logger.error("本地 OCR 降级转换失败: %s", exc)
             if ext == PDF_EXTENSION:
                 try:
-                    return convert_local(file_bytes, filename, ext, t_start)
+                    return convert_pdf_text(file_bytes, filename, t_start)
                 except Exception:
                     pass
             raise DocConvertError(f"OCR 节点不可达且本地 OCR 失败: {exc}", 503)
@@ -1034,7 +1049,7 @@ def convert_document(content: bytes, filename: str, crop: Optional[Dict[str, flo
                         "crop_applied": True,
                     }
                 else:
-                    result = convert_local(content, filename, ext, t_start)
+                    result = convert_pdf_text(content, filename, t_start)
             else:
                 if crop is not None:
                     result = _convert_ocr_cropped_pdf(content, filename, crop, t_start)

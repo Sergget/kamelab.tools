@@ -70,7 +70,8 @@ def test_strip_markdown_light():
 
 def test_markdown_to_docx_fallback():
     docx_bytes, engine = service.markdown_to_docx_bytes(MARKDOWN_SAMPLE)
-    assert engine == "python-docx-fallback"
+    # 引擎取决于部署环境是否安装 pandoc，两种均合法
+    assert engine in ("pandoc", "python-docx-fallback")
     assert len(docx_bytes) > 0
     assert zipfile.is_zipfile(io.BytesIO(docx_bytes))
     with zipfile.ZipFile(io.BytesIO(docx_bytes)) as zf:
@@ -277,7 +278,7 @@ def test_convert_docx_endpoint_download():
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["docx_engine"] == "python-docx-fallback"
+    assert data["docx_engine"] in ("pandoc", "python-docx-fallback")
     assert zipfile.is_zipfile(io.BytesIO(__import__("base64").b64decode(data["file_base64"])))
 
     dl = client.get(f"/api/tools/doc-convert/download/{data['job_id']}")

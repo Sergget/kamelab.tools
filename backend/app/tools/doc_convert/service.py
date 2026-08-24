@@ -902,13 +902,21 @@ def markdown_to_docx_bytes(markdown_text: str) -> Tuple[bytes, str]:
 # ---- 本地转换（纯 Python 提取）----
 def convert_pdf_text(file_bytes: bytes, filename: str,
                      t_start: float) -> Dict[str, Any]:
-    """文本型 PDF：pdftotext 全文提取（-layout 保留版面）。"""
+    """文本型 PDF：pdftotext 全文提取（-layout 保留版面）。
+
+    提取不到文字层时抛错（多半是扫描件，应走 OCR 而不是返回空内容）。
+    """
     proc = _run_poppler("pdftotext", ["-layout"], file_bytes)
+    content = proc.stdout.decode("utf-8", errors="ignore").strip()
+    if not content:
+        raise DocConvertError(
+            "PDF 中没有可提取的文字层（可能是扫描件）。"
+            "请确认 OCR 节点已上线后再试扫描件转换", 422)
     return {
         "success": True,
         "filename": filename,
         "file_size_mb": round(len(file_bytes) / (1024 * 1024), 2),
-        "content": proc.stdout.decode("utf-8", errors="ignore").strip(),
+        "content": content,
         "engine": "pdftotext",
         "routed_to": "local",
         "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
@@ -959,6 +967,8 @@ def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, A
             if ext == PDF_EXTENSION:
                 try:
                     return convert_pdf_text(file_bytes, filename, t_start)
+                except DocConvertError:
+                    pass  # 扫描件无文字层，走下方统一报错
                 except Exception:
                     pass
             raise DocConvertError(f"本地 OCR 失败: {exc}", 503)
@@ -988,6 +998,8 @@ def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, A
             if ext == PDF_EXTENSION:
                 try:
                     return convert_pdf_text(file_bytes, filename, t_start)
+                except DocConvertError:
+                    pass  # 扫描件无文字层，走下方统一报错
                 except Exception:
                     pass
             raise DocConvertError(f"OCR 节点不可达且本地 OCR 失败: {exc}", 503)
@@ -1040,10 +1052,15 @@ def convert_document(content: bytes, filename: str, crop: Optional[Dict[str, flo
         elif ext == PDF_EXTENSION:
             if classify_pdf(content) == "text":
                 if crop is not None:
+                    cropped = crop_pdf_text(content, crop)
+                    if not cropped:
+                        raise DocConvertError(
+                            "裁剪区域内没有文字。请调整裁剪范围；"
+                            "若原文件是扫描件，请确认 OCR 节点已上线", 422)
                     result = {
                         "success": True,
                         "filename": filename,
-                        "content": crop_pdf_text(content, crop),
+                        "content": cropped,
                         "engine": "pdftotext_crop",
                         "routed_to": "local",
                         "crop_applied": True,

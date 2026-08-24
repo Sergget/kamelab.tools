@@ -12,11 +12,77 @@
 
 ## 架构
 
-- 后端：Python FastAPI，`backend/`（pandas + openpyxl + MarkItDown + pdfplumber + PyMuPDF）
+- 后端：Python FastAPI，`backend/`（pandas + openpyxl + MarkItDown + pdfplumber + PyMuPDF，可选 paddleocr 本地 OCR 降级）
 - 前端：Vue 3 + Vite + Element Plus，`frontend/`，构建产物由 FastAPI 直接托管（单进程部署）
 - OCR 节点：独立 Flask 服务 `ocr_server/`（PaddleOCR，CPU 模式，默认 8001 端口），被文档转换工具经 HTTP 调用；节点离线时主服务自动降级
 - 新增工具：在 `backend/app/tools/` 下新建工具包并在 `backend/app/tools/__init__.py` 注册，前端 `frontend/src/router/index.js` 加路由即可
 - 详细文档：工具与依赖细节见 [docs/doc-convert.md](docs/doc-convert.md)、[docs/ocr-node.md](docs/ocr-node.md)
+
+## 文档转换工具的两种部署模式
+
+文档转换工具（doc-convert）支持两种 OCR 部署模式，**仅通过环境变量切换，无需改代码**：
+
+### 模式一：单机自包含（本地 OCR，推荐用于内网/离线场景）
+
+OCR 在后端进程内直接调用本地 PaddleOCR（CPU），**不需要部署任何独立 OCR 服务**。
+
+```ini
+# /etc/systemd/system/lab-tools.service
+Environment=LAB_TOOLS_ENABLED=doc_convert          # 可选：只启用文档转换
+Environment=LAB_TOOLS_OCR_USE_LOCAL=true           # 启用本地 OCR 模式
+```
+
+系统依赖额外需要：
+
+```bash
+apt install -y pandoc poppler-utils \
+    libglib2.0-0 libsm6 libxext6 libxrender1 \
+    libgl1-mesa-glx libgomp1 wget
+```
+
+Python 依赖额外需要（已写入 `backend/requirements.txt`）：
+
+```text
+paddlepaddle>=2.6,<3.0
+paddleocr>=2.7,<3.0
+```
+
+> 注意：PaddleOCR 首次识别时会自动下载模型到用户目录（`~/.paddleocr/`），
+> 请确保服务运行用户（www-data）对该目录有写权限，或提前离线放置模型文件。
+> CPU 推理速度较慢，适合低并发内网使用。
+
+### 模式二：外部 OCR 节点（重型识别分离部署）
+
+图片/扫描 PDF 的 OCR 转发到独立的 `ocr_server/` 节点（默认端口 8001）；
+节点不可达时自动降级为本地 PaddleOCR 兜底（若已安装）。
+
+```ini
+Environment=LAB_TOOLS_OCR_USE_LOCAL=false          # 默认值，可省略
+Environment=LAB_TOOLS_OCR_NODE_URL=http://<ocr节点IP>:8001
+Environment=LAB_TOOLS_OCR_NODE_NAME=win11          # 健康检查展示用
+Environment=LAB_TOOLS_OCR_NODE_ROLE=heavy
+```
+
+OCR 节点部署见 `ocr_server/README` 及其 requirements 文件。此模式下主服务
+**无需安装** paddlepaddle/paddleocr（可从 requirements.txt 中移除以减小体积）。
+
+### 两种模式对比
+
+| | 模式一：本地 OCR | 模式二：外部节点 |
+| --- | --- | --- |
+| 部署机器数 | 1 台 | 主服务 + OCR 节点 ≥ 2 台 |
+| 网络依赖 | 无 | 需可达 OCR 节点 |
+| Python 体积 | 大（含 paddle 全家桶） | 小 |
+| 识别速度 | CPU 较慢 | 可用 GPU 重型节点 |
+| 故障兜底 | — | 节点宕机自动降级本地（若已装） |
+
+验证当前模式：
+
+```bash
+curl http://127.0.0.1:8000/api/tools/doc-convert/health
+# "ocr_use_local": true  → 模式一
+# "ocr_use_local": false → 模式二
+```
 
 ## 本地开发
 
@@ -139,10 +205,11 @@ curl https://lab.sergget.qzz.io/api/health
 | LAB_TOOLS_NODE_NAME / LAB_TOOLS_NODE_ROLE | 主机名 / main | 节点身份（健康检查展示） |
 | **文档转换** | | |
 | LAB_TOOLS_CONVERT_MAX_MB | 50 | 转换文件大小上限 |
-| LAB_TOOLS_OCR_NODE_URL | http://127.0.0.1:8001 | OCR 节点地址（图片/扫描 PDF 识别） |
+| LAB_TOOLS_OCR_USE_LOCAL | false | true = 单机本地 OCR 模式，不探测外部节点 |
+| LAB_TOOLS_OCR_NODE_URL | http://127.0.0.1:8001 | 外部 OCR 节点地址（模式二） |
 | LAB_TOOLS_OCR_TIMEOUT | 120 | 转发 OCR 节点的请求超时（秒） |
 | LAB_TOOLS_OCR_NODE_NAME / LAB_TOOLS_OCR_NODE_ROLE | win11 / heavy | OCR 节点身份（展示用） |
-| LAB_TOOLS_PDF_TEXT_THRESHOLD | 50 | PDF 文本/扫描分类的字符数阈值 |
+| LAB_TOOLS_PDF_TEXT_THRESHOLD | 50 | PDF 分类阈值：前 3 页字符数 ≥ 此值为文本型 |
 | LAB_TOOLS_CROP_PDF_ZOOM | 2.0 | 扫描 PDF 裁剪渲染缩放倍率 |
 | LAB_TOOLS_PANDOC_TIMEOUT | 30 | pandoc 转换超时（秒） |
 | LAB_TOOLS_DOCX_REFERENCE_TEMPLATE | 空 | pandoc 参考模板路径（Markdown→docx 用） |
@@ -167,3 +234,4 @@ OCR 节点侧环境变量（`NODE_NAME`、`PORT`、`OCR_MAX_FILE_MB`、`OCR_MAX_
 ## 规划中的工具
 
 - 在线预览 / 表格编辑等交互式处理能力（当前各工具均为"上传 → 处理 → 下载"模式）
+- Word / PPT / PDF 深度版面分析（多栏、表格结构化）

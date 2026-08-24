@@ -16,6 +16,8 @@ Environment=LAB_TOOLS_TTL_HOURS=2
 Environment=LAB_TOOLS_OCR_NODE_URL=http://192.168.0.81:8001
 Environment=LAB_TOOLS_OCR_NODE_NAME=win11
 Environment=LAB_TOOLS_OCR_NODE_ROLE=heavy
+# 文档转换：本地 OCR 模式（true=单机自包含，无需外部 OCR 节点）
+Environment=LAB_TOOLS_OCR_USE_LOCAL=false
 # 节点身份
 Environment=LAB_TOOLS_NODE_NAME=%H
 Environment=LAB_TOOLS_NODE_ROLE=main

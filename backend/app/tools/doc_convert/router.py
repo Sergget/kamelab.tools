@@ -114,6 +114,7 @@ async def supported_formats():
         "output_formats": list(SUPPORTED_OUTPUT_FORMATS),
         "max_file_size_mb": config.CONVERT_MAX_MB,
         "ocr_node": config.OCR_NODE_URL,
+        "ocr_use_local": config.OCR_USE_LOCAL,
         "capabilities": {
             "crop": True,
             "layout_reconstruction": config.LAYOUT_RECONSTRUCTION_ENABLED,
@@ -137,6 +138,7 @@ async def health():
         "ocr_node": config.OCR_NODE_URL,
         "ocr_node_name": config.OCR_NODE_NAME,
         "ocr_node_role": config.OCR_NODE_ROLE,
+        "ocr_use_local": config.OCR_USE_LOCAL,
         "ocr_status": "UP" if ocr_info is not None else "DOWN",
         "active_tasks": metrics.pop("active_tasks"),
         "metrics": metrics,

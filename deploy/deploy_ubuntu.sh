@@ -117,6 +117,16 @@ deploy_backend() {
         echo "Warning: 未找到 python3，跳过 backend 组件（请先安装 Python 3.10+）" >&2
         return
     fi
+    # 安装 PaddleOCR 运行时系统依赖（仅在本地 OCR 模式下需要）
+    install_paddleocr_deps() {
+        echo ">>> [backend] 检查并安装 PaddleOCR 系统依赖..."
+        if command -v apt-get >/dev/null 2>&1; then
+            apt-get update -qq
+            apt-get install -y -qq libglib2.0-0 libsm6 libxext6 libxrender1 \
+                libgl1-mesa-glx libgomp1 wget curl ca-certificates 2>/dev/null || true
+        fi
+    }
+    install_paddleocr_deps
     # install -d 同时设置 www-data 属主，确保 run.py 运行时对目录有写权限
     # （www-data 也是 lab-tools.service 的 User 字段指定的用户）
     sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${BACKEND_DIR}"

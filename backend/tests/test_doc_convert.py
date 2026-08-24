@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.tools.doc_convert import service
+from app.tools.doc_convert import local_extract, service
 
 client = TestClient(app)
 
@@ -149,6 +149,102 @@ def test_convert_rejects_bad_crop():
         service.parse_crop("not-json")
 
 
+# ---- 本地提取（纯 Python，MarkItDown 替代）----
+
+def test_local_extract_md_txt_json():
+    assert local_extract.extract_markdown("# hi\n\n正文".encode(), ".md").startswith("# hi")
+    assert "内容" in local_extract.extract_markdown("内容".encode("gbk"), ".txt")
+    assert '"a"' in local_extract.extract_markdown(b'{"a": 1}', ".json")
+
+
+def test_local_extract_csv():
+    md = local_extract.extract_markdown("姓名,分数\n张三,90\n李四,80\n".encode(), ".csv")
+    assert "| 姓名 | 分数 |" in md
+    assert "| 张三 | 90 |" in md
+    assert "| 李四 | 80 |" in md
+
+
+def test_local_extract_html():
+    html = ("<html><head><style>.x{}</style></head><body>"
+            "<h1>标题</h1><p>正文<b>加粗</b></p></body></html>").encode("utf-8")
+    text = local_extract.extract_markdown(html, ".html")
+    assert "标题" in text and "正文" in text and "<" not in text
+
+
+def test_local_extract_docx():
+    from docx import Document as MakeDocx
+
+    doc = MakeDocx()
+    doc.add_heading("测试标题", level=1)
+    doc.add_paragraph("普通段落文字")
+    buf = io.BytesIO()
+    doc.save(buf)
+    md = local_extract.extract_markdown(buf.getvalue(), ".docx")
+    assert "测试标题" in md and "普通段落文字" in md
+
+
+def test_local_extract_xlsx():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "成绩"
+    ws.append(["姓名", "分数"])
+    ws.append(["张三", 90])
+    buf = io.BytesIO()
+    wb.save(buf)
+    md = local_extract.extract_markdown(buf.getvalue(), ".xlsx")
+    assert "## 成绩" in md and "张三" in md and "90" in md
+
+
+def test_local_extract_pptx():
+    from pptx import Presentation
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(0, 0, 100, 100)
+    box.text_frame.text = "幻灯片文字"
+    buf = io.BytesIO()
+    prs.save(buf)
+    md = local_extract.extract_markdown(buf.getvalue(), ".pptx")
+    assert "第 1 页" in md and "幻灯片文字" in md
+
+
+def test_local_extract_unsupported():
+    with pytest.raises(local_extract.LocalExtractError):
+        local_extract.extract_markdown(b"x", ".rtf")
+
+
+def test_convert_unsupported_office_ext_now_rejected():
+    # 分支裁剪了 zip/epub/odt 等格式支持，应明确报错而不是静默失败
+    r = client.post(
+        "/api/tools/doc-convert/convert",
+        files={"file": ("a.epub", b"xx", "application/epub+zip")},
+    )
+    assert r.status_code == 400
+
+
+def test_convert_docx_endpoint_real_file():
+    from docx import Document as MakeDocx
+
+    doc = MakeDocx()
+    doc.add_heading("接口测试", level=2)
+    doc.add_paragraph("这是正文内容")
+    buf = io.BytesIO()
+    doc.save(buf)
+    r = client.post(
+        "/api/tools/doc-convert/convert",
+        files={"file": ("真实文档.docx", buf.getvalue(),
+                        "application/vnd.openxmlformats-officedocument"
+                        ".wordprocessingml.document")},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] is True
+    assert "接口测试" in (data["content"] or "")
+    assert "这是正文内容" in (data["content"] or "")
+
+
 # ---- HTTP 接口 ----
 
 def md_bytes() -> bytes:
@@ -163,7 +259,7 @@ def test_convert_md_endpoint_and_download():
     assert r.status_code == 200
     data = r.json()
     assert data["success"] is True
-    assert data["engine"] == "markitdown"
+    assert data["engine"] == "pure-python"
     assert data["content"].startswith("# 标题")
     assert data["download_name"] == "示例.md"
 

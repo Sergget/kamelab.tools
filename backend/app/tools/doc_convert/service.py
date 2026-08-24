@@ -1,11 +1,22 @@
 """文档转换核心逻辑（移植自 puremark-converter / main_server）。
 
 路由策略：
-    office 文档（docx/xlsx/pptx/txt/csv/md 等）→ 本地 MarkItDown 提取
+    office 文档（docx/xlsx/pptx/txt/csv/md 等）→ 本地纯 Python 提取
+                                                  （local_extract，MarkItDown 替代实现）
     图片（png/jpg/bmp/tif/webp 等）           → OCR：优先转发配置的 OCR 节点，
                                                  节点不可达时降级为本地 PaddleOCR（可选安装）
-    PDF                                        → 先分类：文本型走 MarkItDown，
-                                                 扫描型走 OCR（同上含降级）
+    PDF                                        → 先分类：文本型走 pdftotext 提取，
+                                                 扫描型渲染成图片后走 OCR（同上含降级）
+
+mips64el 适配说明（sugon 分支）：
+    - MarkItDown / PyMuPDF / pdfplumber 在该架构无法安装
+      （magika→onnxruntime、pymupdf→libclang/swig、pdfminer→cryptography 均无
+        mips64el wheel 且构建链不可用），改用：
+        * local_extract（mammoth / python-pptx / openpyxl / xlrd，纯 Python）
+        * poppler-utils 的 pdftotext / pdftoppm / pdfinfo（系统命令）
+    - PDF 页面尺寸/页数由 pdfinfo 获取；裁剪与渲染按第一页尺寸换算，
+      混合页面尺寸的文档可能有偏差。
+    - 本地 PaddleOCR 路径保留但需要 paddleocr 才可用（懒加载）。
 
 可选能力：
     crop            按比例裁剪区域后再转换（图片 / 文本型 PDF / 扫描型 PDF）
@@ -23,13 +34,12 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import fitz  # PyMuPDF：扫描型 PDF 渲染/裁剪
-import pdfplumber
 import requests
 from docx import Document
 from docx.oxml import OxmlElement
@@ -38,6 +48,7 @@ from docx.shared import Pt
 from PIL import Image
 
 from ... import config
+from . import local_extract
 from .models import SUPPORTED_OUTPUT_FORMATS
 
 logger = logging.getLogger(__name__)
@@ -98,45 +109,61 @@ def get_metrics() -> Dict[str, Any]:
 
 # ---- 路由表 ----
 LOCAL_ONLY_EXTENSIONS = {
-    ".docx", ".xlsx", ".pptx", ".txt", ".csv",
+    ".docx", ".xlsx", ".xlsm", ".xls", ".pptx", ".txt", ".csv",
     ".html", ".htm", ".xml", ".json", ".md",
-    ".zip", ".epub", ".rtf", ".odt", ".ods", ".odp",
 }
 OCR_ONLY_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 PDF_EXTENSION = ".pdf"
 
-# ---- MarkItDown 实例（懒加载）----
-_markitdown_instance = None
-_markitdown_lock = threading.Lock()
+
+# ---- poppler 命令行工具（pdftotext / pdftoppm / pdfinfo）----
+POPPLER_TIMEOUT = 120
 
 
-def _get_markitdown():
-    global _markitdown_instance
-    if _markitdown_instance is not None:
-        return _markitdown_instance
-    with _markitdown_lock:
-        if _markitdown_instance is None:
-            from markitdown import MarkItDown
-            _markitdown_instance = MarkItDown()
-    return _markitdown_instance
+def _require_poppler(tool: str) -> str:
+    path = shutil.which(tool)
+    if not path:
+        raise DocConvertError(f"服务器未安装 {tool}（poppler-utils），无法处理 PDF", 500)
+    return path
 
 
-def _markitdown_convert(stream: io.BytesIO, ext: str):
-    """兼容不同版本的 MarkItDown API（convert_stream / convert）。"""
-    md = _get_markitdown()
+def _run_poppler(tool: str, args: List[str], file_bytes: bytes) -> subprocess.CompletedProcess:
+    """把 PDF 字节写入临时文件后运行 poppler 工具（老版本对 stdin 支持不稳）。"""
+    binary = _require_poppler(tool)
+    with tempfile.TemporaryDirectory(prefix="labtools-pdf-") as tmpdir:
+        src = Path(tmpdir) / "in.pdf"
+        src.write_bytes(file_bytes)
+        proc = subprocess.run(
+            [binary, *args, str(src)] + (["-"] if tool == "pdftotext" else []),
+            input=None,
+            capture_output=True,
+            timeout=POPPLER_TIMEOUT,
+        )
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(f"{tool} 退出码 {proc.returncode}: {stderr[:300]}")
+        return proc
+
+
+def _pdf_info(file_bytes: bytes) -> Dict[str, int]:
+    """用 pdfinfo 取页数与第一页尺寸（pt）。解析失败返回保守默认值。"""
+    info: Dict[str, int] = {}
     try:
-        return md.convert_stream(stream, file_extension=ext)
-    except (TypeError, AttributeError):
-        return md.convert(stream=stream, file_extension=ext)
-
-
-def md_to_text(result) -> str:
-    """从 MarkItDown 结果里取文本内容。"""
-    text = getattr(result, "text_content", "")
-    if text is None:
-        return ""
-    return text if isinstance(text, str) else str(text)
-
+        proc = _run_poppler("pdfinfo", ["-f", "1", "-l", "1"], file_bytes)
+        text = proc.stdout.decode("utf-8", errors="ignore")
+        m_pages = re.search(r"^Pages:\s+(\d+)", text, re.MULTILINE)
+        if m_pages:
+            info["pages"] = int(m_pages.group(1))
+        m_size = re.search(r"Page\s+\d+ size:\s+([\d.]+)\s+x\s+([\d.]+)", text)
+        if m_size:
+            info["width_pt"] = round(float(m_size.group(1)))
+            info["height_pt"] = round(float(m_size.group(2)))
+    except Exception as exc:
+        logger.warning("pdfinfo 解析失败，使用默认页面参数: %s", exc)
+    info.setdefault("pages", 1)
+    info.setdefault("width_pt", 595)   # A4 纵向
+    info.setdefault("height_pt", 842)
+    return info
 
 # ---- 本地 PaddleOCR 懒加载（可选依赖，用于 OCR 节点不可达时的降级）----
 _local_ocr_instance = None
@@ -173,12 +200,9 @@ def get_local_ocr():
 def classify_pdf(file_bytes: bytes) -> str:
     """判断 PDF 是文本型还是扫描型：提取前 3 页文字，字符数 ≥ 阈值 → text。"""
     try:
-        total_chars = 0
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for i in range(min(3, len(pdf.pages))):
-                page_text = pdf.pages[i].extract_text()
-                if page_text:
-                    total_chars += len(re.sub(r"\s+", "", page_text))
+        proc = _run_poppler("pdftotext", ["-f", "1", "-l", "3"], file_bytes)
+        page_text = proc.stdout.decode("utf-8", errors="ignore")
+        total_chars = len(re.sub(r"\s+", "", page_text))
         return "text" if total_chars >= config.PDF_TEXT_THRESHOLD else "scanned"
     except Exception:
         return "scanned"
@@ -286,44 +310,65 @@ def crop_image_bytes(file_bytes: bytes, crop: Dict[str, float]) -> bytes:
 
 
 def crop_pdf_text(file_bytes: bytes, crop: Dict[str, float]) -> str:
-    """文本型 PDF：按比例裁剪每一页并直接提取文字层，不走 OCR。"""
-    parts = []
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            w, h = page.width, page.height
-            bbox = (
-                crop["x"] * w,
-                crop["y"] * h,
-                (crop["x"] + crop["width"]) * w,
-                (crop["y"] + crop["height"]) * h,
-            )
-            try:
-                text = page.crop(bbox).extract_text() or ""
-            except Exception:
-                text = ""
-            if text.strip():
-                parts.append(text.strip())
-    return "\n\n".join(parts)
+    """文本型 PDF：按比例裁剪每一页并直接提取文字层，不走 OCR。
+
+    pdftotext 的 -x/-y/-W/-H 以 72dpi 像素（≈PDF 点）为单位，对每页取同一区域；
+    页面尺寸按第一页换算，混合页面尺寸的文档可能有偏差。
+    """
+    info = _pdf_info(file_bytes)
+    w_pt, h_pt = info["width_pt"], info["height_pt"]
+    args = [
+        "-x", str(round(crop["x"] * w_pt)),
+        "-y", str(round(crop["y"] * h_pt)),
+        "-W", str(max(1, round(crop["width"] * w_pt))),
+        "-H", str(max(1, round(crop["height"] * h_pt))),
+    ]
+    proc = _run_poppler("pdftotext", args, file_bytes)
+    return proc.stdout.decode("utf-8", errors="ignore").strip()
 
 
 def crop_pdf_page_images(file_bytes: bytes, crop: Dict[str, float]) -> List[Tuple[int, bytes]]:
-    """扫描型 PDF：按比例裁剪每一页并渲染成图片。返回 [(page_no, png_bytes), ...]。"""
+    """扫描型 PDF：pdftoppm 渲染每一页后用 PIL 按比例裁剪。返回 [(page_no, png_bytes), ...]。"""
+    dpi = max(int(72 * config.CROP_PDF_ZOOM), 72)
+    page_count = min(_pdf_info(file_bytes)["pages"], 200)
+    binary = _require_poppler("pdftoppm")
     images: List[Tuple[int, bytes]] = []
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    try:
-        mat = fitz.Matrix(config.CROP_PDF_ZOOM, config.CROP_PDF_ZOOM)
-        for i, page in enumerate(doc, start=1):
-            rect = page.rect
-            clip = fitz.Rect(
-                crop["x"] * rect.width,
-                crop["y"] * rect.height,
-                (crop["x"] + crop["width"]) * rect.width,
-                (crop["y"] + crop["height"]) * rect.height,
+    with tempfile.TemporaryDirectory(prefix="labtools-pdf-") as tmpdir:
+        src = Path(tmpdir) / "in.pdf"
+        src.write_bytes(file_bytes)
+        for page_no in range(1, page_count + 1):
+            prefix = Path(tmpdir) / "page"
+            proc = subprocess.run(
+                [binary, "-png", "-r", str(dpi), "-f", str(page_no), "-l", str(page_no),
+                 str(src), str(prefix)],
+                capture_output=True,
+                timeout=POPPLER_TIMEOUT,
             )
-            pix = page.get_pixmap(matrix=mat, clip=clip)
-            images.append((i, pix.tobytes("png")))
-    finally:
-        doc.close()
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"pdftoppm 第 {page_no} 页渲染失败: "
+                    f"{proc.stderr.decode('utf-8', errors='ignore')[:300]}")
+            rendered = sorted(Path(tmpdir).glob(f"{prefix.name}-*.png"))
+            if not rendered:
+                raise RuntimeError(f"pdftoppm 第 {page_no} 页未生成图片")
+            img = Image.open(rendered[-1])
+            w, h = img.size
+            box = (
+                round(crop["x"] * w),
+                round(crop["y"] * h),
+                round((crop["x"] + crop["width"]) * w),
+                round((crop["y"] + crop["height"]) * h),
+            )
+            box = (
+                min(box[0], w - 1),
+                min(box[1], h - 1),
+                max(box[2], box[0] + 1),
+                max(box[3], box[1] + 1),
+            )
+            cropped = img.crop(box)
+            buf = io.BytesIO()
+            cropped.save(buf, format="PNG")
+            images.append((page_no, buf.getvalue()))
     return images
 
 
@@ -520,6 +565,8 @@ def _do_ocr_local(file_bytes: bytes, ext: str, file_type: str) -> Dict[str, Any]
     if file_type == "image":
         page_lines = _ocr_image_bytes(file_bytes, ocr)
         return {"text": _lines_to_text(page_lines), "pages": 1, "lines": page_lines}
+
+    import fitz  # 仅本地 PaddleOCR 可用时才会走到这里（懒加载）
 
     doc = fitz.open(stream=file_bytes, filetype="pdf")
     page_count = doc.page_count
@@ -852,16 +899,19 @@ def markdown_to_docx_bytes(markdown_text: str) -> Tuple[bytes, str]:
     return markdown_to_docx_bytes_fallback(markdown_text), "python-docx-fallback"
 
 
-# ---- 本地转换（MarkItDown）----
+# ---- 本地转换（纯 Python 提取）----
 def convert_local(file_bytes: bytes, filename: str, ext: str,
                   t_start: float) -> Dict[str, Any]:
-    result = _markitdown_convert(io.BytesIO(file_bytes), ext)
+    try:
+        content = local_extract.extract_markdown(file_bytes, ext)
+    except local_extract.LocalExtractError as exc:
+        raise DocConvertError(str(exc), 400) from exc
     return {
         "success": True,
         "filename": filename,
         "file_size_mb": round(len(file_bytes) / (1024 * 1024), 2),
-        "content": md_to_text(result),
-        "engine": "markitdown",
+        "content": content,
+        "engine": "pure-python",
         "routed_to": "local",
         "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
     }
@@ -979,7 +1029,7 @@ def convert_document(content: bytes, filename: str, crop: Optional[Dict[str, flo
                         "success": True,
                         "filename": filename,
                         "content": crop_pdf_text(content, crop),
-                        "engine": "pdfplumber_crop",
+                        "engine": "pdftotext_crop",
                         "routed_to": "local",
                         "crop_applied": True,
                     }

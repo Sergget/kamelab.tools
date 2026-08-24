@@ -1,0 +1,27 @@
+fastapi>=0.115,<0.116
+pydantic>=1.10,<2.0
+uvicorn>=0.29
+python-multipart>=0.0.9
+pandas>=2.0,<3.0
+openpyxl>=3.1
+xlrd>=2.0
+pytest>=8.0
+httpx>=0.27
+python-docx>=1.1
+pillow>=10.0
+requests>=2.31
+psutil>=5.9
+# ---- doc-convert 纯 Python 提取（MarkItDown 替代）----
+mammoth>=1.6
+python-pptx>=0.6.23
+
+# mips64el (sugon) 部署说明：
+# - 不含 markitdown[all]（magika→onnxruntime 无 mips64el wheel）
+# - 不含 pdfplumber / pymupdf（构建链依赖 cryptography/libclang，同样不可得）
+# - PDF 能力由系统包 poppler-utils 提供：pdftotext / pdftoppm / pdfinfo
+# - OCR 走外部节点（LAB_TOOLS_OCR_NODE_URL），本机不装 paddleocr
+#
+# 注意：numpy/pandas/pydantic-core 等在该架构需源码编译：
+#   * 需要 GCC >= 8.4（如 /opt/gcc12），安装前 export CC/CXX
+#   * fastapi 锁在 0.115.x 以使用纯 Python 的 pydantic v1
+#     （pydantic v2 的 pydantic-core 需要 Rust，而 Rust 从未发布过 mips64el 编译器）

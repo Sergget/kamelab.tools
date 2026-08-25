@@ -79,7 +79,7 @@ sudo bash ./deploy_ubuntu.sh service
 | `GET /supported_formats` | 能力自描述（格式、上限、`structured_lines` 行级输出） |
 | `POST /convert` | OCR 转换：`multipart/form-data`，字段 `file`；查询参数 `include_lines`（默认 true，返回行级 bbox+置信度，供主服务版面重建） |
 
-业务参数（环境变量，默认值）：`OCR_MAX_FILE_MB=100`、`OCR_MAX_PDF_PAGES=200`、`OCR_TIMEOUT_SEC=300`、`OCR_PDF_DPI=200`、`NODE_NAME=win11`、`NODE_ROLE=heavy`、`PORT=8001`。
+业务参数（环境变量，默认值）：`OCR_MAX_FILE_MB=100`、`OCR_MAX_PDF_PAGES=200`、`OCR_TIMEOUT_SEC=300`、`OCR_PDF_DPI=200`、`NODE_NAME=ocr-node`、`NODE_ROLE=heavy`、`PORT=8001`。
 
 ## 常见问题
 

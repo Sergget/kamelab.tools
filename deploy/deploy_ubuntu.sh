@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # ============================================================
-# deploy_ubuntu.sh — Lab Tools（Ubuntu）「可选组件」部署脚本
+# deploy_ubuntu.sh — Lab Tools（Ubuntu Server）「可选组件」部署脚本
 #
 # 适用于：自托管办公文件处理工具箱的单台 Ubuntu Server 部署
-# 目标主机：J3455（4GB 内存，Ubuntu Server 20.04，预装 Node 20+ / Python 3.10+）
+# 目标主机：Ubuntu Server 20.04+，预装 Node 20+ / Python 3.10+
 # 部署路径：/var/www/lab-tools（被 systemd 服务与 Nginx 反代引用）
+#
+# 部署模式（DEPLOY_MODE 环境变量）：
+#   A: 主服务器 + 远程 OCR 节点
+#   B: Ubuntu 主服务 + 远程 GPU OCR 节点
+#   C: 仅 Excel 工具，禁用文档转换
+#   D: Ubuntu 单机全功能（本地 GPU OCR）
 #
 # 部署组件（可单独或组合指定，不传参数时默认部署全部 all）：
 #   backend   后端代码（backend/ 下所有内容：run.py、app/、requirements.txt 等）
@@ -36,8 +42,8 @@
 #     依赖缺失时仅打印警告并跳过对应组件，不会中断部署。
 #   - backend / service 组件部署完成后会自动 restart 服务，使改动立即生效；
 #   - frontend / nginx 组件为静态产物/代理配置，不影响运行中的进程，不触发重启；
-#   - 配置（OCR 节点地址、端口、工具开关等）直接编辑 deploy/lab-tools.service；
-#     域名与 SSL 证书见 deploy/lab-tools.conf，部署后按需修改。
+#   - 配置（OCR 节点地址、端口、工具开关等）通过环境变量配置，
+#     见 deploy/lab-tools.service 与 deploy/lab-tools.env.example；
 #   - nginx 的 lab-tools.conf 若不存在，仅打印警告，不中断部署。
 # ============================================================
 set -euo pipefail
@@ -47,12 +53,12 @@ APP_NAME="lab-tools"
 TARGET_DIR="/var/www/${APP_NAME}"           # 部署目标根目录（systemd 与 nginx 均引用此路径）
 BACKEND_DIR="${TARGET_DIR}/backend"         # 后端代码目录（run.py / app/ / .venv / data）
 STATIC_DIR="${BACKEND_DIR}/app/static"      # 前端静态产物目录（FastAPI 直接托管）
-SERVICE_NAME="${APP_NAME}"                  # systemd 服务名，与 lab-tools.service 的 [Unit] 对应
+SERVICE_NAME="lab-tools"                    # systemd 服务名
 SERVICE_SRC="${ROOT_DIR}/deploy/lab-tools.service"
 NGINX_CONF_SRC="${ROOT_DIR}/deploy/lab-tools.conf"
-SYSTEMD_DEST="/etc/systemd/system/${SERVICE_NAME}.service"
-NGINX_AVAILABLE="/etc/nginx/sites-available/${SERVICE_NAME}"
-NGINX_ENABLED="/etc/nginx/sites-enabled/${SERVICE_NAME}"
+SYSTEMD_DEST="/etc/systemd/system/lab-tools.service"
+NGINX_AVAILABLE="/etc/nginx/sites-available/lab-tools"
+NGINX_ENABLED="/etc/nginx/sites-enabled/lab-tools"
 SERVICE_USER="www-data"
 
 KNOWN_PARTS="backend frontend service nginx all"
@@ -90,20 +96,19 @@ need() { [ -n "${PARTS[all]:-}" ] || [ -n "${PARTS[$1]:-}" ]; }
 
 # ---- 修复数据目录（service 的 ReadWritePaths 指向 data/，缺失会导致启动失败）----
 fix_up() {
-    echo ">>> [fixup] 确保数据目录存在并归 ${SERVICE_USER} 属主"
-    sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${BACKEND_DIR}/data"
+    echo ">>> [fixup] 确保数据目录存在并归 www-data 属主"
+    sudo install -d -o "www-data" -g "www-data" "/var/www/lab-tools/backend/data"
 }
 
 # ---- 重启服务（backend / service 部署后调用，使改动生效）----
 restart_service() {
-    fix_up
-    if [ -f "${SYSTEMD_DEST}" ]; then
+    if [ -f "/etc/systemd/system/lab-tools.service" ]; then
         sudo systemctl daemon-reload
-        sudo systemctl enable --now "$SERVICE_NAME" 2>/dev/null || true
-        sudo systemctl restart "$SERVICE_NAME"
-        echo ">>> 已重启服务 ${SERVICE_NAME}"
+        sudo systemctl enable --now lab-tools 2>/dev/null || true
+        sudo systemctl restart lab-tools
+        echo ">>> 已重启服务 lab-tools"
     else
-        echo "Warning: 服务 ${SERVICE_NAME}.service 尚未安装，跳过重启" >&2
+        echo "Warning: 服务 lab-tools.service 尚未安装，跳过重启" >&2
     fi
 }
 
@@ -111,53 +116,69 @@ restart_service() {
 #  组件 1：后端代码（backend/）
 # ============================================================
 deploy_backend() {
-    echo ">>> [backend] 部署后端代码 backend/ -> ${BACKEND_DIR}"
-    # 依赖检查：需要 python3（脚本不再自动安装，缺失时仅警告并跳过）
+    echo ">>> [backend] 部署后端代码 backend/ -> /var/www/lab-tools/backend"
     if ! command -v python3 >/dev/null 2>&1; then
         echo "Warning: 未找到 python3，跳过 backend 组件（请先安装 Python 3.10+）" >&2
         return
     fi
-    # 安装 PaddleOCR 运行时系统依赖（仅在本地 OCR 模式下需要）
-    install_paddleocr_deps() {
-        echo ">>> [backend] 检查并安装 PaddleOCR 系统依赖..."
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get update -qq
-            apt-get install -y -qq libglib2.0-0 libsm6 libxext6 libxrender1 \
-                libgl1-mesa-glx libgomp1 wget curl ca-certificates 2>/dev/null || true
-        fi
-    }
-    install_paddleocr_deps
-    # install -d 同时设置 www-data 属主，确保 run.py 运行时对目录有写权限
-    # （www-data 也是 lab-tools.service 的 User 字段指定的用户）
-    sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${BACKEND_DIR}"
-    # 同步 backend/ 下所有内容（run.py、app/、requirements.txt 等）
-    # 排除 .venv（虚拟环境由脚本管理）与 data/（运行数据，避免被 --delete 清除）
+    # 安装系统依赖（poppler-utils 等）
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update -qq
+        apt-get install -y -qq libglib2.0-0 libsm6 libxext6 libxrender1 \
+            libgl1-mesa-glx libgomp1 poppler-utils curl ca-certificates 2>/dev/null || true
+    fi
+    sudo install -d -o "www-data" -g "www-data" "/var/www/lab-tools/backend"
     if command -v rsync >/dev/null 2>&1; then
         sudo rsync -a --delete --exclude '.venv/' --exclude 'data/' \
-            "${ROOT_DIR}/backend/" "${BACKEND_DIR}/"
+            "${ROOT_DIR}/backend/" "/var/www/lab-tools/backend/"
     else
-        # 无 rsync 时用 cp 兜底：先移开服务器端 .venv，同步后再恢复，
-        # 避免仓库中的开发机 .venv 覆盖服务器端已安装的虚拟环境
-        if [ -d "${BACKEND_DIR}/.venv" ]; then
-            sudo mv "${BACKEND_DIR}/.venv" "${BACKEND_DIR}/.venv.bak"
+        if [ -d "/var/www/lab-tools/backend/.venv" ]; then
+            sudo mv "/var/www/lab-tools/backend/.venv" "/var/www/lab-tools/backend/.venv.bak"
         fi
-        sudo cp -a "${ROOT_DIR}/backend/." "${BACKEND_DIR}/"
-        if [ -d "${BACKEND_DIR}/.venv.bak" ]; then
-            sudo rm -rf "${BACKEND_DIR}/.venv"
-            sudo mv "${BACKEND_DIR}/.venv.bak" "${BACKEND_DIR}/.venv"
+        sudo cp -a "${ROOT_DIR}/backend/." "/var/www/lab-tools/backend/"
+        if [ -d "/var/www/lab-tools/backend/.venv.bak" ]; then
+            sudo rm -rf "/var/www/lab-tools/backend/.venv"
+            sudo mv "/var/www/lab-tools/backend/.venv.bak" "/var/www/lab-tools/backend/.venv"
         fi
     fi
-    # 虚拟环境不存在时创建（已存在则复用，加快增量部署）
-    if [ ! -d "${BACKEND_DIR}/.venv" ]; then
-        sudo python3 -m venv "${BACKEND_DIR}/.venv"
+    if [ ! -d "/var/www/lab-tools/backend/.venv" ]; then
+        sudo python3 -m venv "/var/www/lab-tools/backend/.venv"
     fi
-    # 安装/更新 Python 依赖（pip 安装保留：依赖仍然需要安装）
-    sudo "${BACKEND_DIR}/.venv/bin/pip" install --quiet --upgrade pip
-    sudo "${BACKEND_DIR}/.venv/bin/pip" install --quiet -r "${BACKEND_DIR}/requirements.txt"
-    # 统一归 www-data，保证服务进程可读写 data 目录
-    sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${TARGET_DIR}"
-    # 代码更新后必须重启服务，否则运行中的进程仍是旧代码
+    sudo "/var/www/lab-tools/backend/.venv/bin/pip" install --quiet --upgrade pip
+    # 根据部署模式选择 requirements 文件
+    MODE="${DEPLOY_MODE:-A}"
+    case "${MODE}" in
+        C)
+            REQ_FILE="requirements-minimal.txt"
+            ;;
+        D)
+            REQ_FILE="requirements.txt"
+            ;;
+        A|B)
+            REQ_FILE="requirements-ocr-cpu.txt"
+            ;;
+        *)
+            REQ_FILE="requirements.txt"
+            ;;
+    esac
+    if [ -f "/var/www/lab-tools/backend/${REQ_FILE}" ]; then
+        sudo "/var/www/lab-tools/backend/.venv/bin/pip" install --quiet -r "/var/www/lab-tools/backend/${REQ_FILE}"
+    else
+        sudo "/var/www/lab-tools/backend/.venv/bin/pip" install --quiet -r "/var/www/lab-tools/backend/requirements.txt"
+    fi
+    sudo chown -R "www-data:www-data" "/var/www/lab-tools"
     restart_service
+}
+
+restart_service() {
+    if [ -f "/etc/systemd/system/lab-tools.service" ]; then
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now lab-tools 2>/dev/null || true
+        sudo systemctl restart lab-tools
+        echo ">>> 已重启服务 lab-tools"
+    else
+        echo "Warning: 服务 lab-tools.service 尚未安装，跳过重启" >&2
+    fi
 }
 
 # ============================================================
@@ -165,16 +186,13 @@ deploy_backend() {
 # ============================================================
 deploy_frontend() {
     echo ">>> [frontend] 构建前端并放置静态产物"
-    # 自动加载 nvm 中的 node（sudo 运行时 HOME=/root，需回退到原用户家目录）
     NVM_HOME="${HOME}"
     if [ -n "${SUDO_USER:-}" ] && [ -d "/home/${SUDO_USER}/.nvm" ]; then
         NVM_HOME="/home/${SUDO_USER}"
     fi
     if [ -s "${NVM_HOME}/.nvm/nvm.sh" ]; then
-        # shellcheck disable=SC1091
         NVM_DIR="${NVM_HOME}/.nvm" . "${NVM_HOME}/.nvm/nvm.sh" >/dev/null 2>&1
     fi
-    # 依赖检查：需要 node + npm（脚本不再自动安装，缺失时仅警告并跳过）
     if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
         echo "Warning: 未找到 node 或 npm，跳过 frontend 组件（请先安装 Node 20+）" >&2
         return
@@ -183,7 +201,6 @@ deploy_frontend() {
         echo "Warning: 未找到 frontend 目录，跳过前端构建" >&2
         return
     fi
-    # 在临时目录构建，避免污染仓库（node_modules / dist）
     FRONTEND_TMP="$(mktemp -d)"
     cp -r "${ROOT_DIR}/frontend/." "${FRONTEND_TMP}/"
     (
@@ -191,13 +208,11 @@ deploy_frontend() {
         npm install --no-fund --no-audit >/dev/null 2>&1
         npm run build
     )
-    # 先删旧产物再放置新产物（FastAPI 单进程托管静态文件，目录结构需干净）
-    sudo rm -rf "${STATIC_DIR}"
-    sudo install -d -o "${SERVICE_USER}" -g "${SERVICE_USER}" "$(dirname "${STATIC_DIR}")"
-    sudo cp -r "${FRONTEND_TMP}/dist" "${STATIC_DIR}"
-    sudo chown -R "${SERVICE_USER}:${SERVICE_USER}" "${STATIC_DIR}"
+    sudo rm -rf "/var/www/lab-tools/backend/app/static"
+    sudo install -d -o "www-data" -g "www-data" "/var/www/lab-tools/backend/app"
+    sudo cp -r "${FRONTEND_TMP}/dist" "/var/www/lab-tools/backend/app/static"
+    sudo chown -R "www-data:www-data" "/var/www/lab-tools/backend/app/static"
     rm -rf "${FRONTEND_TMP}"
-    # 前端为静态文件，由 FastAPI 每次请求读取，无需重启服务
 }
 
 # ============================================================
@@ -205,15 +220,15 @@ deploy_frontend() {
 # ============================================================
 deploy_service() {
     echo ">>> [service] 安装 systemd 服务单元"
-    # lab-tools.service 定义了 User/WorkingDirectory/Environment 等配置
-    # （OCR 节点地址、端口、工具开关等），配置修改后重跑本组件即可生效
-    if [ -f "${SERVICE_SRC}" ]; then
-        sudo install -m 0644 "${SERVICE_SRC}" "${SYSTEMD_DEST}"
+    if [ -f "${ROOT_DIR}/deploy/lab-tools.service" ]; then
+        sudo install -m 0644 "${ROOT_DIR}/deploy/lab-tools.service" "/etc/systemd/system/lab-tools.service"
     else
-        echo "Warning: service file not found: ${SERVICE_SRC}" >&2
+        echo "Warning: service file not found" >&2
     fi
-    # 单元文件变化后必须 daemon-reload，再重启服务生效
-    restart_service
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now lab-tools 2>/dev/null || true
+    sudo systemctl restart lab-tools
+    echo ">>> 已重启服务 lab-tools"
 }
 
 # ============================================================
@@ -221,24 +236,103 @@ deploy_service() {
 # ============================================================
 deploy_nginx() {
     echo ">>> [nginx] 安装 Nginx 反向代理配置"
-    # lab-tools.conf 将 lab.sergget.qzz.io 的 HTTPS 流量代理到 127.0.0.1:8000
-    # （后端监听的内部端口，由 lab-tools.service 的 LAB_TOOLS_PORT 环境变量决定）
-    # SSL 证书位于 /etc/nginx/snippets/ssl-sergget.conf（需独立维护）
-    if [ -f "${NGINX_CONF_SRC}" ]; then
-        sudo install -m 0644 "${NGINX_CONF_SRC}" "${NGINX_AVAILABLE}"
-        sudo ln -sf "${NGINX_AVAILABLE}" "${NGINX_ENABLED}"
+    if [ -f "${ROOT_DIR}/deploy/lab-tools.conf" ]; then
+        sudo install -m 0644 "${ROOT_DIR}/deploy/lab-tools.conf" "/etc/nginx/sites-available/lab-tools"
+        sudo ln -sf "/etc/nginx/sites-available/lab-tools" "/etc/nginx/sites-enabled/lab-tools"
         if command -v nginx >/dev/null 2>&1; then
-            # 验证配置语法，失败不中断后续流程
             sudo nginx -t >/dev/null 2>&1 || true
-            # 优先 reload（不中断现有连接），失败时 fallback 到 restart
             if systemctl list-unit-files 2>/dev/null | grep -q '^nginx.service'; then
                 sudo systemctl reload nginx 2>/dev/null || sudo systemctl restart nginx 2>/dev/null || true
             fi
         fi
     else
-        echo "Warning: nginx config not found: ${NGINX_CONF_SRC}" >&2
+        echo "Warning: nginx config not found" >&2
     fi
 }
+
+# ============================================================
+#  解析要部署的组件
+# ============================================================
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_NAME="lab-tools"
+TARGET_DIR="/var/www/${APP_NAME}"
+BACKEND_DIR="/var/www/${APP_NAME}/backend"
+STATIC_DIR="${BACKEND_DIR}/app/static"
+SERVICE_NAME="lab-tools"
+SERVICE_SRC="${ROOT_DIR}/deploy/lab-tools.service"
+NGINX_CONF_SRC="${ROOT_DIR}/deploy/lab-tools.conf"
+SYSTEMD_DEST="/etc/systemd/system/lab-tools.service"
+NGINX_AVAILABLE="/etc/nginx/sites-available/lab-tools"
+NGINX_ENABLED="/etc/nginx/sites-enabled/lab-tools"
+SERVICE_USER="www-data"
+
+KNOWN_PARTS="backend frontend service nginx all"
+PART_COUNT="$#"
+
+usage() {
+    sed -n '2,42p' "$0" | sed 's/^# \?//' | sed 's/^/  /'
+}
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
+
+declare -A PARTS
+if [ "$PART_COUNT" -eq 0 ]; then
+    PARTS[all]=1
+else
+    for p in "$@"; do
+        case " $KNOWN_PARTS " in
+            *" $p "*) PARTS["$p"]=1 ;;
+            *)
+                echo "Error: unknown component '$p'" >&2
+                echo "Usage: $0 [backend] [frontend] [service] [nginx] [all]" >&2
+                exit 1
+                ;;
+        esac
+    done
+fi
+
+need() { [ -n "${PARTS[all]:-}" ] || [ -n "${PARTS[$1]:-}" ]; }
+
+# ---- 修复数据目录 ----
+fix_up() {
+    echo ">>> [fixup] 确保数据目录存在并归 www-data 属主"
+    sudo install -d -o "www-data" -g "www-data" "/var/www/lab-tools/backend/data"
+}
+
+# ---- 重启服务 ----
+restart_service() {
+    fix_up
+    if [ -f "/etc/systemd/system/lab-tools.service" ]; then
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now lab-tools 2>/dev/null || true
+        sudo systemctl restart lab-tools
+        echo ">>> 已重启服务 lab-tools"
+    else
+        echo "Warning: 服务 lab-tools.service 尚未安装，跳过重启" >&2
+    fi
+}
+
+# ============================================================
+#  解析要部署的组件
+# ============================================================
+PART_COUNT="$#"
+declare -A PARTS
+if [ "$PART_COUNT" -eq 0 ]; then
+    PARTS[all]=1
+else
+    for p in "$@"; do
+        case " $KNOWN_PARTS " in
+            *" $p "*) PARTS["$p"]=1 ;;
+            *)
+                echo "Error: unknown component '$p'" >&2
+                echo "Usage: $0 [backend] [frontend] [service] [nginx] [all]" >&2
+                exit 1
+                ;;
+        esac
+    done
+fi
 
 # ============================================================
 #  按需执行各组件
@@ -266,12 +360,11 @@ if [ -n "${PARTS[all]:-}" ]; then
 else
     printf '%s\n' "$*"
 fi
-printf '后端代码（run.py）：%s\n' "${BACKEND_DIR}/run.py"
-printf '前端静态产物：      %s\n' "${STATIC_DIR}"
-printf 'Nginx 配置文件：    %s\n' "${NGINX_AVAILABLE}"
-printf 'systemd 服务：      %s （已重启）\n' "${SYSTEMD_DEST}"
+printf '后端代码（run.py）：%s/run.py\n' "/var/www/lab-tools/backend"
+printf '前端静态产物：      %s\n' "/var/www/lab-tools/backend/app/static"
+printf 'Nginx 配置文件：    /etc/nginx/sites-available/lab-tools\n'
+printf 'systemd 服务：      /etc/systemd/system/lab-tools.service （已重启）\n'
 printf '\n验证命令：\n'
-printf '  systemctl status %s\n' "${SERVICE_NAME}"
+printf '  systemctl status lab-tools\n'
 printf '  curl http://127.0.0.1:8000/api/health\n'
-printf '  curl https://lab.sergget.qzz.io/api/health\n'
 printf '=====================================\n'

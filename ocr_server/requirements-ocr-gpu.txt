@@ -1,0 +1,56 @@
+# =============================================================================
+# OCR 节点 - GPU 版（PaddleOCR + GPU 加速）
+# =============================================================================
+# 环境：Python 3.11 + CUDA 11.8+ + cuDNN 8.6+
+# 硬件：NVIDIA GPU (Compute Capability 6.1+ Pascal 架构以上，如 GTX 1060+)
+# 注意：GTX 960 (Maxwell CC 5.2) 不支持 GPU 加速，需用 CPU 版
+# =============================================================================
+
+# ---- Web 框架与健康检查 ----
+flask
+flask-cors
+psutil
+
+# ---- PaddleOCR GPU 版 ----
+paddlepaddle-gpu==2.6.2
+paddleocr==2.7.0.3
+
+# ---- PDF 渲染（扫描件逐页转图）----
+PyMuPDF>=1.25.0
+
+# ---- 图片处理 ----
+Pillow
+opencv-python<=4.6.0.66
+opencv-contrib-python<=4.6.0.66
+
+# ---- 数值计算 ----
+numpy<2.0.0
+
+# ---- PaddleOCR 附加依赖（运行时必须）----
+shapely
+scikit-image
+imgaug
+pyclipper
+lmdb
+tqdm
+PyYAML
+python-bidi==0.4.2
+rapidfuzz
+cython
+lxml
+premailer
+openpyxl
+attrdict3
+pyyaml
+python-docx
+beautifulsoup4
+fonttools
+fire
+pdf2docx
+
+# ---- 图片处理（GPU 版需完整 opencv）----
+opencv-python<=4.6.0.66
+opencv-contrib-python<=4.6.0.66
+
+# ---- 数值计算 ----
+numpy<2.0.0

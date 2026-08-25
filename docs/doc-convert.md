@@ -72,7 +72,7 @@
 | `LAB_TOOLS_CONVERT_MAX_MB` | 50 | 转换文件大小上限 |
 | `LAB_TOOLS_OCR_NODE_URL` | http://127.0.0.1:8001 | OCR 节点地址 |
 | `LAB_TOOLS_OCR_TIMEOUT` | 120 | 转发 OCR 节点的请求超时（秒） |
-| `LAB_TOOLS_OCR_NODE_NAME` / `LAB_TOOLS_OCR_NODE_ROLE` | win11 / heavy | OCR 节点身份（仅展示用） |
+| `LAB_TOOLS_OCR_NODE_NAME` / `LAB_TOOLS_OCR_NODE_ROLE` | ocr-node / heavy | OCR 节点身份（仅展示用） |
 | `LAB_TOOLS_PDF_TEXT_THRESHOLD` | 50 | PDF 文本/扫描分类的字符数阈值 |
 | `LAB_TOOLS_CROP_PDF_ZOOM` | 2.0 | 扫描 PDF 裁剪渲染缩放倍率 |
 | `LAB_TOOLS_PANDOC_TIMEOUT` | 30 | pandoc 转换超时（秒） |

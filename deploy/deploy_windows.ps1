@@ -32,7 +32,7 @@ Python 解释器路径。默认使用 <项目根>\ocr_server\.venv\Scripts\pytho
 OCR 服务监听端口（默认 8001，与 Ubuntu 端 LAB_TOOLS_OCR_NODE_URL 默认值一致）。
 
 .PARAMETER NodeName / NodeRole
-节点名称与角色（默认 win11 / heavy），用于 health 输出与调度层标识。
+节点名称与角色（默认 ocr-node / heavy），用于 health 输出与调度层标识。
 
 .PARAMETER OcrMaxFileMb / OcrMaxPdfPages / OcrTimeoutSec / OcrPdfDpi
 OCR 业务参数（默认 100MB / 200页 / 300s / 200DPI）。
@@ -64,7 +64,7 @@ param(
     [string]$PythonExe,
     [string]$AppScript = "ocr_server.py",
     [string]$Port = "8001",
-    [string]$NodeName = "win11",
+    [string]$NodeName = "ocr-node",
     [string]$NodeRole = "heavy",
     [string]$OcrMaxFileMb = "100",
     [string]$OcrMaxPdfPages = "200",

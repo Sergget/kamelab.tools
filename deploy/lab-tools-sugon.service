@@ -1,0 +1,46 @@
+[Unit]
+Description=Lab Tools Web Service (sugon)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/lab-tools/backend
+ExecStart=/var/www/lab-tools/backend/.venv/bin/python run.py
+Environment=LAB_TOOLS_HOST=0.0.0.0
+Environment=LAB_TOOLS_PORT=8000
+Environment=LAB_TOOLS_DATA_DIR=/var/www/lab-tools/backend/data
+Environment=LAB_TOOLS_TTL_HOURS=24
+# ---- 部署模式：sugon (mips64el) ----
+# sugon 架构无本地 OCR 引擎，文档转换走远程 OCR 节点（模式 A）
+# OCR 节点地址：修改为实际 OCR 节点 IP
+Environment=DEPLOY_MODE=A
+Environment=LAB_TOOLS_OCR_NODE_URL=http://192.168.0.81:8001
+Environment=LAB_TOOLS_OCR_NODE_NAME=win11
+Environment=LAB_TOOLS_OCR_NODE_ROLE=heavy
+# 本地 OCR 回退：false（sugon 无本地 OCR 引擎可用）
+Environment=LAB_TOOLS_OCR_USE_LOCAL=false
+# 文档转换总开关
+Environment=LAB_TOOLS_ENABLED_DOC_CONVERT=true
+# sugon 架构优化：更长的 TTL、更大超时
+Environment=LAB_TOOLS_MAX_UPLOAD_MB=100
+Environment=LAB_TOOLS_OCR_TIMEOUT=300
+Environment=LAB_TOOLS_PDF_TEXT_THRESHOLD=50
+Environment=LAB_TOOLS_CROP_PDF_ZOOM=2.0
+# 文档汇编工具
+Environment=LAB_TOOLS_COMPILE_MAX_MB=50
+Environment=LAB_TOOLS_COMPILE_CONVERT_TIMEOUT=120
+# 节点身份
+Environment=LAB_TOOLS_NODE_NAME=%H
+Environment=LAB_TOOLS_NODE_ROLE=main
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/www/lab-tools/backend/data
+
+[Install]
+WantedBy=multi-user.target

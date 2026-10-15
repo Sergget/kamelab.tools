@@ -39,7 +39,8 @@ RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# sugon Python 位于 /home/sugon/opt/python311，ProtectHome 会阻止访问
+ProtectHome=false
 ReadWritePaths=/var/www/lab-tools/backend/data
 
 [Install]

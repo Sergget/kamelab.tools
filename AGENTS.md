@@ -9,6 +9,7 @@
 1. 判断任务归属，用 Task 工具派发给对应 subagent（可并行派发互不依赖的任务）：
    - `excel-split` — Excel 表格拆分工具（后端 + 前端 + 测试）
    - `excel-diff` — Excel 表格比对工具（后端 + 前端 + 测试）
+   - `contact-manager` — 通讯录归档与管理工具（后端 + 前端 + 测试）
    - `doc-convert` — 文档转换工具（后端 + 前端 + OCR 对接 + 测试）
    - `frontend` — 前端通用工作（视图 / 路由 / API 封装 / 构建）
    - `backend` — 后端基础设施（入口 / 配置 / 临时文件 / 工具注册 / 测试框架）
@@ -22,15 +23,15 @@
 
 | 目录 | 说明 |
 | --- | --- |
-| `backend/app/main.py` | 入口：CORS、按 `ENABLED_TOOLS` 条件挂载工具路由、SPA 静态托管 |
-| `backend/app/config.py` | 全部 `LAB_TOOLS_*` 环境变量 |
+| `backend/app/main.py` | 入口：CORS、按 `ENABLED_TOOLS` 惰性挂载工具路由（单个工具导入失败只跳过该工具并告警，不影响整体启动）、SPA 静态托管 |
+| `backend/app/config.py` | 全部 `LAB_TOOLS_*` 环境变量（OCR 相关同时兼容不带前缀的短名） |
 | `backend/app/temp_files.py` | 上传/产物存储 + TTL 清理 |
-| `backend/app/tools/` | 工具包：`excel_split/`、`excel_diff/`、`doc_convert/`，注册表在 `__init__.py` |
+| `backend/app/tools/` | 工具包：`excel_split/`、`excel_diff/`、`doc_convert/`、`contact_manager/`，注册表在 `__init__.py`（工具元信息登记后，工具包本身可稍后实现：未挂载的工具不会出现在 `/api/tools`） |
 | `backend/tests/` | pytest，按工具 `test_<tool>.py` |
 | `frontend/src/` | Vue 3 `<script setup>` + Element Plus；`api/index.js` 统一封装后端调用 |
 | `ocr_server/` | 独立 OCR 节点（8001），被 doc-convert 经 HTTP 调用 |
 | `deploy/` | Ubuntu/Windows 部署脚本 + systemd 单元 |
-| `docs/` | 工具与依赖文档：`doc-convert.md`（文档转换）、`ocr-node.md`（OCR 节点依赖/部署），README 有导航链接 |
+| `docs/` | 工具与依赖文档：`doc-convert.md`（文档转换）、`contact-manager.md`（通讯录归档）、`ocr-node.md`（OCR 节点依赖/部署），README 有导航链接 |
 
 ## 通用约定
 

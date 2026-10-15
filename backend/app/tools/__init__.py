@@ -30,12 +30,36 @@ TOOLS = [
         "route": "/tools/excel-diff",
         "keywords": ["excel", "xlsx", "xls", "比对", "对比", "差异", "diff", "高亮", "表格"],
     },
+    {
+        "id": "contact-manager",
+        "name": "通讯录归档与管理",
+        "description": "处理、格式化、归档不同日期的通讯录Excel，自动提取特征与字段映射，支持多版本时点查询与可视化增删改查。删除项目前必须先验证密码，再导出完整数据库备份。",
+        "icon": "User",
+        "route": "/tools/contact-manager",
+        "keywords": ["通讯录", "excel", "归档", "管理", "联系人", "版本"],
+    },
+    {
+        "id": "doc-compile",
+        "name": "文档汇编",
+        "description": "批量上传 Word/WPS 文档（doc/docx/docm/wps 等），拖拽排序后自动汇编为单个 Word 文档，支持标题作者识别编辑、目录与封面，可写回源文档。",
+        "icon": "Collection",
+        "route": "/tools/doc-compile",
+        "keywords": ["doc", "docx", "docm", "wps", "汇编", "合并", "目录", "Word", "批量"],
+    },
 ]
 
 
-def enabled_tools():
-    """返回启用的工具列表。若配置了 LAB_TOOLS_ENABLED 则按其过滤，否则返回全部。"""
-    if config.ENABLED_TOOLS is None:
-        return TOOLS
-    enabled = config.ENABLED_TOOLS
-    return [t for t in TOOLS if t["id"] in enabled]
+def enabled_tools(mounted=None):
+    """返回启用的工具列表。
+
+    - 若配置了 LAB_TOOLS_ENABLED，则按其过滤；否则返回全部登记项。
+    - mounted 为实际挂载成功的工具 id 集合（由 main.py 传入）：只对外通告
+      真正可用的工具，避免首页出现「登记了但工具包缺失/依赖不全」的入口。
+    """
+    tools = TOOLS
+    if config.ENABLED_TOOLS is not None:
+        enabled = config.ENABLED_TOOLS
+        tools = [t for t in tools if t["id"] in enabled]
+    if mounted is not None:
+        tools = [t for t in tools if t["id"] in mounted]
+    return tools

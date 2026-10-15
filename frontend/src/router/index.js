@@ -28,6 +28,18 @@ const router = createRouter({
       meta: { title: 'Excel 表格比对' },
     },
     {
+      path: '/tools/contact-manager',
+      name: 'contact-manager',
+      component: () => import('../views/ContactManagerView.vue'),
+      meta: { title: '通讯录归档与管理' },
+    },
+    {
+      path: '/tools/doc-compile',
+      name: 'doc-compile',
+      component: () => import('../views/DocCompileView.vue'),
+      meta: { title: '文档汇编' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

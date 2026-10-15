@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,8 @@ from fastapi.responses import FileResponse
 
 from . import config, temp_files
 from .tools import enabled_tools
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -29,19 +32,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 根据配置的 ENABLED_TOOLS 条件挂载路由（惰性导入：缺失某工具的依赖不影响其它工具启动）
-if config.ENABLED_TOOLS is None or "excel-split" in config.ENABLED_TOOLS:
-    from .tools.excel_split.router import router as excel_split_router
+# 工具 id -> 路由模块（相对 app 包的模块路径）。新增工具时在此登记；工具包本身在
+# backend/app/tools/<name>/，并需在 tools/__init__.py 的 TOOLS 中登记元信息。
+_TOOL_ROUTER_MODULES = {
+    "excel-split": "tools.excel_split.router",
+    "doc-convert": "tools.doc_convert.router",
+    "excel-diff": "tools.excel_diff.router",
+    "contact-manager": "tools.contact_manager.router",
+    "doc-compile": "tools.doc_compile.router",
+}
 
-    app.include_router(excel_split_router)
-if config.ENABLED_TOOLS is None or "doc-convert" in config.ENABLED_TOOLS:
-    from .tools.doc_convert.router import router as doc_convert_router
+# 实际挂载成功的工具 id 集合，用于 /api/tools 只对外通告真正可用的工具
+_mounted_tools: set[str] = set()
 
-    app.include_router(doc_convert_router)
-if config.ENABLED_TOOLS is None or "excel-diff" in config.ENABLED_TOOLS:
-    from .tools.excel_diff.router import router as excel_diff_router
 
-    app.include_router(excel_diff_router)
+def _mount_tool_routers() -> None:
+    """按 ENABLED_TOOLS 挂载工具路由（惰性导入 + 容错）。
+
+    某个工具包缺失、或依赖不全导致导入失败时，只记录警告并跳过该工具，
+    不影响其它工具与整个服务的启动。这样在仓库中登记了工具元信息、
+    但工具包尚未实现（或依赖未安装）时，服务仍可正常启动。
+    """
+    for tool_id, module_suffix in _TOOL_ROUTER_MODULES.items():
+        if config.ENABLED_TOOLS is not None and tool_id not in config.ENABLED_TOOLS:
+            continue
+        module_path = f"{__package__}.{module_suffix}"
+        try:
+            module = importlib.import_module(module_path)
+        except Exception as exc:  # noqa: BLE001 - 任何导入失败都不应阻断启动
+            logger.warning(
+                "跳过工具 %s：导入 %s 失败（%s: %s）",
+                tool_id, module_path, type(exc).__name__, exc,
+            )
+            continue
+        app.include_router(module.router)
+        _mounted_tools.add(tool_id)
+
+
+_mount_tool_routers()
 
 
 @app.get("/api/health")
@@ -51,7 +79,8 @@ async def health():
 
 @app.get("/api/tools")
 async def list_tools():
-    return enabled_tools()
+    """返回可用工具列表（只包含实际挂载成功的工具）。"""
+    return enabled_tools(mounted=_mounted_tools)
 
 
 if config.STATIC_DIR.exists():

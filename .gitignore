@@ -15,3 +15,7 @@ Thumbs.db
 .playwright-mcp/
 *.pid
 
+
+# 本地测试残留
+.tmp_t/
+pytest-cache-files-*/

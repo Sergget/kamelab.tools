@@ -5,6 +5,7 @@
 """
 
 import json
+import logging
 import shutil
 import threading
 import time
@@ -13,6 +14,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from . import config
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_dirs() -> None:
@@ -50,6 +53,63 @@ def get_upload_meta(file_id: str) -> Dict[str, Any]:
         except (json.JSONDecodeError, OSError):
             return {}
     return {}
+
+
+# ---------------------------------------------------------------------------
+# 通用文件工作区（doc-compile 等工具使用）：每个 file_id 一个独立子目录，
+# 存放原始文件、转换产物、元数据与预览缓存，不受 ALLOWED_EXTENSIONS 限制。
+# 同样纳入 UPLOAD_DIR 的 TTL 清理。
+# ---------------------------------------------------------------------------
+
+def new_work_dir(file_id: str, names: Dict[str, str]) -> Path:
+    """创建 file_id 工作区，返回 {逻辑名 -> 文件名} 的目录路径。"""
+    _ensure_dirs()
+    work_dir = config.UPLOAD_DIR / "work" / file_id
+    if work_dir.exists():
+        shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for logical, filename in names.items():
+        (work_dir / filename).write_bytes(b"")
+    return work_dir
+
+
+def get_work_dir(file_id: str) -> Optional[Path]:
+    work_dir = config.UPLOAD_DIR / "work" / file_id
+    return work_dir if work_dir.is_dir() else None
+
+
+def save_work_file(file_id: str, filename: str, content: bytes) -> Path:
+    _ensure_dirs()
+    work_dir = config.UPLOAD_DIR / "work" / file_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    path = work_dir / filename
+    path.write_bytes(content)
+    return path
+
+
+def read_work_file(file_id: str, filename: str) -> Optional[bytes]:
+    work_dir = config.UPLOAD_DIR / "work" / file_id
+    path = work_dir / filename
+    if path.is_file():
+        return path.read_bytes()
+    return None
+
+
+def write_work_json(file_id: str, filename: str, data: Dict[str, Any]) -> Path:
+    return save_work_file(
+        file_id, filename,
+        json.dumps(data, ensure_ascii=False).encode("utf-8"),
+    )
+
+
+def read_work_json(file_id: str, filename: str) -> Dict[str, Any]:
+    raw = read_work_file(file_id, filename)
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def save_job(file_id: str, files: Dict[str, bytes], zip_bytes: Optional[bytes],
@@ -96,7 +156,7 @@ def _cleanup_dir(directory: Path, ttl_hours: float) -> None:
                 else:
                     entry.unlink(missing_ok=True)
         except OSError:
-            pass
+            logger.debug("清理临时文件失败: %s", entry, exc_info=True)
 
 
 _cleanup_stop = threading.Event()

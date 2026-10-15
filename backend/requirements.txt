@@ -1,18 +1,66 @@
-fastapi>=0.110,<1.0
-uvicorn[standard]>=0.29
+# =============================================================================
+# Lab Tools - 完整依赖（Ubuntu x86_64 全功能）
+# =============================================================================
+# 环境：Python 3.10+ (推荐 3.11)
+# 包含：完整文档转换 + 本地 OCR (RapidOCR / PaddleOCR) 回退
+# =============================================================================
+
+# ---- Web 框架与健康检查 ----
+fastapi>=0.115,<0.116
+pydantic>=1.10,<2.0
+uvicorn>=0.29
 python-multipart>=0.0.9
+
+# ---- Excel 工具 ----
 pandas>=2.0,<3.0
 openpyxl>=3.1
 xlrd>=2.0
+
+# ---- 测试 ----
 pytest>=8.0
 httpx>=0.27
-# ---- 文档转换（doc-convert）----
-markitdown[all]>=0.1
-pdfplumber>=0.10
-pymupdf>=1.24
+
+# ---- 文档转换核心（本地纯 Python 提取）----
+# office / 文本：local_extract.py 使用（不依赖 markitdown / pdfplumber / PyMuPDF）
+mammoth>=1.6
+python-pptx>=0.6.23
 python-docx>=1.1
 pillow>=10.0
 requests>=2.31
 psutil>=5.9
-paddlepaddle>=2.6,<3.0
-paddleocr>=2.7,<3.0
+
+# PDF 文本提取与渲染：由系统包 poppler-utils 提供（pdftotext / pdftoppm / pdfinfo），
+# 不通过 pip 安装：Ubuntu 执行 `sudo apt install poppler-utils`
+# docx 输出优先使用 pandoc（`sudo apt install pandoc`），缺失时自动降级 python-docx
+
+# ---- OCR 引擎 ----
+# RapidOCR (ONNXRuntime) - 无 AVX 要求，CPU 推理
+rapidocr_onnxruntime
+
+# PaddleOCR GPU/CPU - 需 AVX 支持，可选 GPU 加速
+paddlepaddle-gpu==2.6.2
+paddleocr==2.7.0.3
+
+# 图片处理
+opencv-python<=4.6.0.66
+opencv-contrib-python<=4.6.0.66
+
+# 数值计算
+numpy<2.0.0
+
+# PaddleOCR 附加依赖
+shapely
+scikit-image
+imgaug
+pyclipper
+lmdb
+tqdm
+PyYAML
+python-bidi==0.4.2
+rapidfuzz
+cython
+lxml
+attrdict3
+beautifulsoup4
+fonttools
+fire

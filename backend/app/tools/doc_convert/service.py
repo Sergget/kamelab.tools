@@ -1,11 +1,23 @@
-"""文档转换核心逻辑（移植自 puremark-converter / main_server）。
+"""文档转换核心逻辑。
 
 路由策略：
-    office 文档（docx/xlsx/pptx/txt/csv/md 等）→ 本地 MarkItDown 提取
+    office 文档（docx/xlsx/pptx/txt/csv/md 等）→ 本地纯 Python 提取
+                                                  （local_extract，MarkItDown 替代实现）
     图片（png/jpg/bmp/tif/webp 等）           → OCR：优先转发配置的 OCR 节点，
-                                                 节点不可达时降级为本地 PaddleOCR（可选安装）
-    PDF                                        → 先分类：文本型走 MarkItDown，
-                                                 扫描型走 OCR（同上含降级）
+                                                  节点不可达时降级为本地 OCR（可选）
+    PDF                                        → 先分类：文本型走 pdftotext 提取，
+                                                  扫描型渲染成图片后走 OCR（同上含降级）
+
+部署模式（DEPLOY_MODE）：
+    A: 主服务器 + 远程 OCR 节点
+    B: Ubuntu 主服务 + 远程 GPU OCR 节点
+    C: 仅 Excel 工具，禁用文档转换
+    D: Ubuntu 单机全功能（本地 GPU OCR）
+
+OCR 引擎（OCR_ENGINE）：
+    rapidocr: RapidOCR (ONNXRuntime) - 无 AVX 要求，内存占用低
+    paddleocr: PaddleOCR - 需 AVX 支持，可选 GPU 加速
+    auto: 自动检测（有 nvidia-smi 且 OCR_USE_GPU=true 选 paddleocr，否则 rapidocr）
 
 可选能力：
     crop            按比例裁剪区域后再转换（图片 / 文本型 PDF / 扫描型 PDF）
@@ -23,13 +35,12 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import fitz  # PyMuPDF：扫描型 PDF 渲染/裁剪
-import pdfplumber
 import requests
 from docx import Document
 from docx.oxml import OxmlElement
@@ -38,6 +49,8 @@ from docx.shared import Pt
 from PIL import Image
 
 from ... import config
+from . import local_extract
+from . import factory
 from .models import SUPPORTED_OUTPUT_FORMATS
 
 logger = logging.getLogger(__name__)
@@ -98,87 +111,69 @@ def get_metrics() -> Dict[str, Any]:
 
 # ---- 路由表 ----
 LOCAL_ONLY_EXTENSIONS = {
-    ".docx", ".xlsx", ".pptx", ".txt", ".csv",
+    ".docx", ".xlsx", ".xlsm", ".xls", ".pptx", ".txt", ".csv",
     ".html", ".htm", ".xml", ".json", ".md",
-    ".zip", ".epub", ".rtf", ".odt", ".ods", ".odp",
 }
 OCR_ONLY_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 PDF_EXTENSION = ".pdf"
 
-# ---- MarkItDown 实例（懒加载）----
-_markitdown_instance = None
-_markitdown_lock = threading.Lock()
+# ---- poppler 命令行工具（pdftotext / pdftoppm / pdfinfo）----
+POPPLER_TIMEOUT = 120
 
 
-def _get_markitdown():
-    global _markitdown_instance
-    if _markitdown_instance is not None:
-        return _markitdown_instance
-    with _markitdown_lock:
-        if _markitdown_instance is None:
-            from markitdown import MarkItDown
-            _markitdown_instance = MarkItDown()
-    return _markitdown_instance
+def _require_poppler(tool: str) -> str:
+    path = shutil.which(tool)
+    if not path:
+        raise DocConvertError(f"服务器未安装 {tool}（poppler-utils），无法处理 PDF", 500)
+    return path
 
 
-def _markitdown_convert(stream: io.BytesIO, ext: str):
-    """兼容不同版本的 MarkItDown API（convert_stream / convert）。"""
-    md = _get_markitdown()
+def _run_poppler(tool: str, args: List[str], file_bytes: bytes) -> subprocess.CompletedProcess:
+    """把 PDF 字节写入临时文件后运行 poppler 工具（老版本对 stdin 支持不稳）。"""
+    binary = _require_poppler(tool)
+    with tempfile.TemporaryDirectory(prefix="labtools-pdf-") as tmpdir:
+        src = Path(tmpdir) / "in.pdf"
+        src.write_bytes(file_bytes)
+        proc = subprocess.run(
+            [binary, *args, str(src)] + (["-"] if tool == "pdftotext" else []),
+            input=None,
+            capture_output=True,
+            timeout=POPPLER_TIMEOUT,
+        )
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode("utf-8", errors="ignore").strip()
+            raise RuntimeError(f"{tool} 退出码 {proc.returncode}: {stderr[:300]}")
+        return proc
+
+
+def _pdf_info(file_bytes: bytes) -> Dict[str, int]:
+    """用 pdfinfo 取页数与第一页尺寸（pt）。解析失败返回保守默认值。"""
+    info: Dict[str, int] = {}
     try:
-        return md.convert_stream(stream, file_extension=ext)
-    except (TypeError, AttributeError):
-        return md.convert(stream=stream, file_extension=ext)
-
-
-def md_to_text(result) -> str:
-    """从 MarkItDown 结果里取文本内容。"""
-    text = getattr(result, "text_content", "")
-    if text is None:
-        return ""
-    return text if isinstance(text, str) else str(text)
-
-
-# ---- 本地 PaddleOCR 懒加载（可选依赖，用于 OCR 节点不可达时的降级）----
-_local_ocr_instance = None
-_local_ocr_init_lock = threading.Lock()
-_local_ocr_exec_lock = threading.Lock()  # PaddleOCR 推理串行化，防止多线程抢占 C++ 状态
-_local_ocr_init_error = None
-
-
-def get_local_ocr():
-    """获取本地 PaddleOCR 单例（CPU 模式）。未安装 paddleocr 时返回 None。"""
-    global _local_ocr_instance, _local_ocr_init_error
-    if _local_ocr_instance is not None:
-        return _local_ocr_instance
-    if _local_ocr_init_error is not None:
-        return None
-    with _local_ocr_init_lock:
-        if _local_ocr_instance is not None:
-            return _local_ocr_instance
-        if _local_ocr_init_error is not None:
-            return None
-        try:
-            from paddleocr import PaddleOCR
-            logger.info("正在初始化本地 PaddleOCR（首次加载模型，CPU 模式）...")
-            _local_ocr_instance = PaddleOCR(lang="ch", use_angle_cls=False, use_gpu=False)
-            logger.info("本地 PaddleOCR 初始化完成（CPU 模式）")
-            return _local_ocr_instance
-        except Exception as exc:
-            _local_ocr_init_error = str(exc)
-            logger.error("本地 PaddleOCR 初始化失败: %s", exc)
-            return None
+        proc = _run_poppler("pdfinfo", ["-f", "1", "-l", "1"], file_bytes)
+        text = proc.stdout.decode("utf-8", errors="ignore")
+        m_pages = re.search(r"^Pages:\s+(\d+)", text, re.MULTILINE)
+        if m_pages:
+            info["pages"] = int(m_pages.group(1))
+        m_size = re.search(r"Page\s+\d+ size:\s+([\d.]+)\s+x\s+([\d.]+)", text)
+        if m_size:
+            info["width_pt"] = round(float(m_size.group(1)))
+            info["height_pt"] = round(float(m_size.group(2)))
+    except Exception as exc:
+        logger.warning("pdfinfo 解析失败，使用默认页面参数: %s", exc)
+    info.setdefault("pages", 1)
+    info.setdefault("width_pt", 595)   # A4 纵向
+    info.setdefault("height_pt", 842)
+    return info
 
 
 # ---- PDF 分类 ----
 def classify_pdf(file_bytes: bytes) -> str:
     """判断 PDF 是文本型还是扫描型：提取前 3 页文字，字符数 ≥ 阈值 → text。"""
     try:
-        total_chars = 0
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for i in range(min(3, len(pdf.pages))):
-                page_text = pdf.pages[i].extract_text()
-                if page_text:
-                    total_chars += len(re.sub(r"\s+", "", page_text))
+        proc = _run_poppler("pdftotext", ["-f", "1", "-l", "3"], file_bytes)
+        page_text = proc.stdout.decode("utf-8", errors="ignore")
+        total_chars = len(re.sub(r"\s+", "", page_text))
         return "text" if total_chars >= config.PDF_TEXT_THRESHOLD else "scanned"
     except Exception:
         return "scanned"
@@ -187,8 +182,10 @@ def classify_pdf(file_bytes: bytes) -> str:
 # ---- OCR 节点转发 ----
 def check_ocr_node() -> Optional[Dict[str, Any]]:
     """探活 OCR 节点，返回健康信息或 None。"""
+    if not config.OCR_NODE_URL:
+        return None
     try:
-        resp = requests.get(f"{config.OCR_NODE_URL}/health", timeout=2)
+        resp = requests.get(f"{config.OCR_NODE_URL}/health", timeout=config.OCR_NODE_TIMEOUT)
         return resp.json() if resp.ok else None
     except Exception:
         return None
@@ -286,47 +283,69 @@ def crop_image_bytes(file_bytes: bytes, crop: Dict[str, float]) -> bytes:
 
 
 def crop_pdf_text(file_bytes: bytes, crop: Dict[str, float]) -> str:
-    """文本型 PDF：按比例裁剪每一页并直接提取文字层，不走 OCR。"""
-    parts = []
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page in pdf.pages:
-            w, h = page.width, page.height
-            bbox = (
-                crop["x"] * w,
-                crop["y"] * h,
-                (crop["x"] + crop["width"]) * w,
-                (crop["y"] + crop["height"]) * h,
-            )
-            try:
-                text = page.crop(bbox).extract_text() or ""
-            except Exception:
-                text = ""
-            if text.strip():
-                parts.append(text.strip())
-    return "\n\n".join(parts)
+    """文本型 PDF：按比例裁剪每一页并直接提取文字层，不走 OCR。
+
+    pdftotext 的 -x/-y/-W/-H 以 72dpi 像素（≈PDF 点）为单位，对每页取同一区域；
+    页面尺寸按第一页换算，混合页面尺寸的文档可能有偏差。
+    """
+    info = _pdf_info(file_bytes)
+    w_pt, h_pt = info["width_pt"], info["height_pt"]
+    args = [
+        "-x", str(round(crop["x"] * w_pt)),
+        "-y", str(round(crop["y"] * h_pt)),
+        "-W", str(max(1, round(crop["width"] * w_pt))),
+        "-H", str(max(1, round(crop["height"] * h_pt))),
+    ]
+    proc = _run_poppler("pdftotext", args, file_bytes)
+    return proc.stdout.decode("utf-8", errors="ignore").strip()
 
 
 def crop_pdf_page_images(file_bytes: bytes, crop: Dict[str, float]) -> List[Tuple[int, bytes]]:
-    """扫描型 PDF：按比例裁剪每一页并渲染成图片。返回 [(page_no, png_bytes), ...]。"""
+    """扫描型 PDF：pdftoppm 渲染每一页后用 PIL 按比例裁剪。返回 [(page_no, png_bytes), ...]。"""
+    dpi = max(int(72 * config.CROP_PDF_ZOOM), 72)
+    page_count = min(_pdf_info(file_bytes)["pages"], 200)
+    binary = _require_poppler("pdftoppm")
     images: List[Tuple[int, bytes]] = []
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    try:
-        mat = fitz.Matrix(config.CROP_PDF_ZOOM, config.CROP_PDF_ZOOM)
-        for i, page in enumerate(doc, start=1):
-            rect = page.rect
-            clip = fitz.Rect(
-                crop["x"] * rect.width,
-                crop["y"] * rect.height,
-                (crop["x"] + crop["width"]) * rect.width,
-                (crop["y"] + crop["height"]) * rect.height,
+    with tempfile.TemporaryDirectory(prefix="labtools-pdf-") as tmpdir:
+        src = Path(tmpdir) / "in.pdf"
+        src.write_bytes(file_bytes)
+        for page_no in range(1, page_count + 1):
+            prefix = Path(tmpdir) / "page"
+            proc = subprocess.run(
+                [binary, "-png", "-r", str(dpi), "-f", str(page_no), "-l", str(page_no),
+                 str(src), str(prefix)],
+                capture_output=True,
+                timeout=POPPLER_TIMEOUT,
             )
-            pix = page.get_pixmap(matrix=mat, clip=clip)
-            images.append((i, pix.tobytes("png")))
-    finally:
-        doc.close()
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"pdftoppm 第 {page_no} 页渲染失败: "
+                    f"{proc.stderr.decode('utf-8', errors='ignore')[:300]}")
+            rendered = sorted(Path(tmpdir).glob(f"{prefix.name}-*.png"))
+            if not rendered:
+                raise RuntimeError(f"pdftoppm 第 {page_no} 页未生成图片")
+            img = Image.open(rendered[-1])
+            w, h = img.size
+            box = (
+                round(crop["x"] * w),
+                round(crop["y"] * h),
+                round((crop["x"] + crop["width"]) * w),
+                round((crop["y"] + crop["height"]) * h),
+            )
+            box = (
+                min(box[0], w - 1),
+                min(box[1], h - 1),
+                max(box[2], box[0] + 1),
+                max(box[3], box[1] + 1),
+            )
+            cropped = img.crop(box)
+            buf = io.BytesIO()
+            cropped.save(buf, format="PNG")
+            images.append((page_no, buf.getvalue()))
     return images
 
 
+# ---- OCR 文本提取 ----
 def _extract_ocr_text(result: Dict[str, Any]) -> str:
     """从 OCR 节点响应里尽量取出文字内容。"""
     for key in ("content", "text", "markdown"):
@@ -469,78 +488,114 @@ def _apply_layout_reconstruction(result: Dict[str, Any],
     result.pop("lines", None)
 
 
-def _extract_lines(ocr_result, page_num: Optional[int] = None) -> List[Dict[str, Any]]:
-    """从 PaddleOCR 原始输出提取结构化行信息（文字 + bbox + 置信度）。"""
-    if not ocr_result or len(ocr_result) == 0 or ocr_result[0] is None:
-        return []
-    lines = []
-    for item in ocr_result[0]:
-        if item is None:
-            continue
-        try:
-            bbox_raw, (text, confidence) = item
-            if not text or not str(text).strip():
-                continue
-            bbox = [[round(float(x), 1), round(float(y), 1)] for x, y in bbox_raw]
-            line = {
-                "text": str(text),
-                "bbox": bbox,
-                "confidence": round(float(confidence), 4),
+# ---- OCR 处理核心 ----
+def _ocr_via_extractor(file_bytes: bytes, filename: str, ext: str, t_start: float) -> Dict[str, Any]:
+    """通过配置的提取器执行 OCR。"""
+    extractor = factory.get_ocr_extractor()
+    if extractor is None:
+        raise DocConvertError("OCR 引擎不可用：未配置 OCR 节点且本地引擎不可用", 503)
+
+    try:
+        if ext.lower() == ".pdf":
+            # PDF: 渲染每页后逐页 OCR
+            page_images = extractor.render_pdf_pages(file_bytes, dpi=200)
+            all_texts = []
+            all_lines = []
+            for page_no, img_bytes in page_images:
+                result = extractor._ocr_image(img_bytes)
+                page_text = result["text"]
+                if page_text.strip():
+                    all_texts.append(f"--- 第 {page_no} 页 ---\n{page_text}")
+                for line in result.get("lines", []):
+                    line["page"] = page_no
+                all_lines.extend(result.get("lines", []))
+
+            text = "\n\n".join(all_texts)
+            return {
+                "text": text,
+                "pages": len(page_images),
+                # 注意：必须返回累积的 all_lines，而不是循环结束后残留的最后一页 result
+                "lines": all_lines,
             }
-            if page_num is not None:
-                line["page"] = page_num
-            lines.append(line)
-        except (IndexError, TypeError, ValueError):
-            continue
-    return lines
+        else:
+            # 图片：直接 OCR
+            result = extractor._ocr_image(file_bytes)
+            return {
+                "text": result["text"],
+                "pages": 1,
+                "lines": result.get("lines", []),
+            }
+
+    except Exception as exc:
+        logger.error(f"OCR 处理失败: {exc}")
+        raise DocConvertError(f"OCR 处理失败: {exc}", 500)
+
+
+def _do_ocr_with_fallback(file_bytes: bytes, filename: str, ext: str, t_start: float) -> Dict[str, Any]:
+    """OCR 处理：支持节点优先/本地降级/本地优先模式。"""
+    if config.OCR_USE_LOCAL:
+        # 本地优先模式
+        logger.info("本地 OCR 模式，直接使用本地引擎: %s", filename)
+        try:
+            result = _ocr_via_extractor(file_bytes, filename, ext, t_start)
+            return {
+                "success": True,
+                "filename": filename,
+                "content": result["text"],
+                "engine": "local",
+                "routed_to": "local",
+                "pages": result["pages"],
+                "lines": result["lines"],
+                "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
+            }
+        except Exception as exc:
+            logger.error("本地 OCR 转换失败: %s", exc)
+            raise DocConvertError(f"本地 OCR 失败: {exc}", 503) from exc
+
+    # 有远程节点且不强制本地
+    if config.OCR_NODE_URL and check_ocr_node() is not None:
+        # 远程节点可用，转发
+        result, status = forward_to_ocr_node(file_bytes, filename)
+        if result.get("success"):
+            result["routed_to"] = "ocr_node"
+            result["route_elapsed_ms"] = round((time.perf_counter() - t_start) * 1000)
+        if not result.get("success"):
+            raise DocConvertError(result.get("error", "OCR 转换失败"),
+                                  status if 400 <= status <= 599 else 502)
+        return result
+
+    # 节点不可达，尝试本地降级
+    logger.info("OCR 节点不可达，降级为本地引擎: %s", filename)
+    try:
+        return _process_local_ocr(file_bytes, filename, t_start)
+    except Exception as exc:
+        logger.error("本地 OCR 降级失败: %s", exc)
+        raise DocConvertError(f"OCR 节点不可达且本地引擎失败: {exc}", 503) from exc
+
+
+def _process_local_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, Any]:
+    """本地 OCR 处理（使用工厂获取的提取器）。"""
+    ext = Path(filename).suffix.lower()
+    result = _ocr_via_extractor(file_bytes, filename, ext, t_start)
+    return {
+        "success": True,
+        "filename": filename,
+        "content": result["text"],
+        "engine": "local",
+        "routed_to": "local",
+        "pages": result["pages"],
+        "lines": result["lines"],
+        "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
+    }
 
 
 def _lines_to_text(lines: List[Dict[str, Any]]) -> str:
     return "\n".join(line["text"] for line in lines)
 
 
-def _ocr_image_bytes(file_bytes: bytes, ocr, page_num: Optional[int] = None) -> List[Dict[str, Any]]:
-    """对图片字节做本地 PaddleOCR 识别，返回行列表。"""
-    import numpy as np
-    img = Image.open(io.BytesIO(file_bytes))
-    if img.mode != "RGB":
-        img = img.convert("RGB")
-    img_array = np.array(img)
-    with _local_ocr_exec_lock:
-        raw_result = ocr.ocr(img_array, cls=False)
-    return _extract_lines(raw_result, page_num=page_num)
-
-
-def _do_ocr_local(file_bytes: bytes, ext: str, file_type: str) -> Dict[str, Any]:
-    """本地 PaddleOCR CPU 模式全内存转换。"""
-    ocr = get_local_ocr()
-    if ocr is None:
-        raise RuntimeError(f"本地 OCR 引擎不可用: {_local_ocr_init_error or '未知原因'}")
-
-    if file_type == "image":
-        page_lines = _ocr_image_bytes(file_bytes, ocr)
-        return {"text": _lines_to_text(page_lines), "pages": 1, "lines": page_lines}
-
-    doc = fitz.open(stream=file_bytes, filetype="pdf")
-    page_count = doc.page_count
-    all_texts: List[str] = []
-    all_lines: List[Dict[str, Any]] = []
-    try:
-        for page_num in range(page_count):
-            pix = doc[page_num].get_pixmap(dpi=150)
-            page_lines = _ocr_image_bytes(pix.tobytes("png"), ocr, page_num=page_num + 1)
-            page_text = _lines_to_text(page_lines)
-            if page_text.strip():
-                all_texts.append(f"--- 第 {page_num + 1} 页 ---\n{page_text}")
-            all_lines.extend(page_lines)
-    finally:
-        doc.close()
-    return {"text": "\n\n".join(all_texts), "pages": page_count, "lines": all_lines}
-
-
 def _convert_ocr_cropped_pdf(file_bytes: bytes, filename: str,
                              crop: Dict[str, float], t_start: float) -> Dict[str, Any]:
-    """扫描型 PDF + 裁剪：逐页裁剪渲染后转 OCR 节点，拼接结果；支持本地 OCR 降级。"""
+    """扫描型 PDF + 裁剪：逐页裁剪渲染后转 OCR，拼接结果。"""
     ocr_node_up = check_ocr_node() is not None
     try:
         page_images = crop_pdf_page_images(file_bytes, crop)
@@ -551,31 +606,19 @@ def _convert_ocr_cropped_pdf(file_bytes: bytes, filename: str,
     page_errors: List[Dict[str, Any]] = []
     all_lines: List[Dict[str, Any]] = []
 
-    if not ocr_node_up:
-        logger.info("OCR 节点不可达，降级为本地 OCR 识别裁剪后的扫描 PDF: %s", filename)
-        ocr = get_local_ocr()
-        if ocr is None:
-            raise DocConvertError(
-                f"OCR 节点不可达且本地 OCR 不可用: {_local_ocr_init_error or 'paddleocr 未安装'}", 503
-            )
-        for page_no, img_bytes in page_images:
-            try:
-                page_lines = _ocr_image_bytes(img_bytes, ocr, page_num=page_no)
-                page_texts.append(f"<!-- page {page_no} -->\n{_lines_to_text(page_lines)}")
-                all_lines.extend(page_lines)
-            except Exception as exc:
-                page_errors.append({"page": page_no, "error": f"本地 OCR 失败: {exc}"})
-    else:
-        for page_no, img_bytes in page_images:
-            result, status = forward_to_ocr_node(
-                img_bytes, f"{filename}_page{page_no}.png")
-            if result.get("success"):
-                page_texts.append(f"<!-- page {page_no} -->\n{_extract_ocr_text(result)}")
-                for ln in result.get("lines") or []:
-                    ln["page"] = page_no
-                    all_lines.append(ln)
-            else:
-                page_errors.append({"page": page_no, "error": result.get("error", f"HTTP {status}")})
+    extractor = factory.get_ocr_extractor()
+    if extractor is None:
+        raise DocConvertError("OCR 引擎不可用", 503)
+
+    for page_no, img_bytes in page_images:
+        try:
+            result = extractor._ocr_image(img_bytes)
+            page_texts.append(f"<!-- page {page_no} -->\n{result['text']}")
+            for line in result.get("lines", []):
+                line["page"] = page_no
+                all_lines.append(line)
+        except Exception as exc:
+            page_errors.append({"page": page_no, "error": f"OCR 失败: {exc}"})
 
     if not page_texts:
         raise DocConvertError("所有裁剪页 OCR 均失败", 502)
@@ -584,8 +627,8 @@ def _convert_ocr_cropped_pdf(file_bytes: bytes, filename: str,
         "success": True,
         "filename": filename,
         "content": "\n\n".join(page_texts),
-        "engine": "paddleocr_cpu_local" if not ocr_node_up else "paddleocr_cpu",
-        "routed_to": "local_ocr" if not ocr_node_up else "ocr_node",
+        "engine": "local",
+        "routed_to": "local",
         "crop_applied": True,
         "pages_processed": len(page_images),
         "lines": all_lines,
@@ -605,6 +648,7 @@ _TABLE_SEP_CELL_RE = re.compile(r"^:?-{2,}:?$")
 
 
 def validate_output_format(raw: str) -> str:
+    """校验 output_format，非法时抛 DocConvertError。"""
     fmt = (raw or "md").strip().lower()
     if fmt not in SUPPORTED_OUTPUT_FORMATS:
         raise DocConvertError(f"output_format 必须是 {sorted(SUPPORTED_OUTPUT_FORMATS)} 之一")
@@ -852,16 +896,32 @@ def markdown_to_docx_bytes(markdown_text: str) -> Tuple[bytes, str]:
     return markdown_to_docx_bytes_fallback(markdown_text), "python-docx-fallback"
 
 
-# ---- 本地转换（MarkItDown）----
+# ---- 本地转换（纯 Python 提取）----
+def _extract_pdf_text(file_bytes: bytes) -> str:
+    """文本型 PDF 全文提取（poppler-utils 的 pdftotext）。"""
+    proc = _run_poppler("pdftotext", ["-layout"], file_bytes)
+    return proc.stdout.decode("utf-8", errors="ignore").strip()
+
+
 def convert_local(file_bytes: bytes, filename: str, ext: str,
                   t_start: float) -> Dict[str, Any]:
-    result = _markitdown_convert(io.BytesIO(file_bytes), ext)
+    """本地纯 Python 提取：office/文本走 local_extract，文本型 PDF 走 poppler。"""
+    if ext == PDF_EXTENSION:
+        content = _extract_pdf_text(file_bytes)
+        engine = "poppler"
+    else:
+        try:
+            content = local_extract.extract_markdown(file_bytes, ext)
+        except local_extract.LocalExtractError as exc:
+            raise DocConvertError(str(exc), 400) from exc
+        engine = "pure-python"
+
     return {
         "success": True,
         "filename": filename,
         "file_size_mb": round(len(file_bytes) / (1024 * 1024), 2),
-        "content": md_to_text(result),
-        "engine": "markitdown",
+        "content": content,
+        "engine": engine,
         "routed_to": "local",
         "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
     }
@@ -869,130 +929,95 @@ def convert_local(file_bytes: bytes, filename: str, ext: str,
 
 # ---- OCR 转换 ----
 def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, Any]:
-    """图片/扫描 PDF → OCR。优先本地；配置了 OCR 节点且可达时转发。"""
-    # 本地优先模式：直接使用本地 PaddleOCR，不探测外部节点
-    if config.OCR_USE_LOCAL:
-        logger.info("本地 OCR 模式，直接使用本地 PaddleOCR: %s", filename)
-        ext = Path(filename).suffix.lower()
-        file_type = "pdf" if ext == PDF_EXTENSION else "image"
-        try:
-            result = _do_ocr_local(file_bytes, ext, file_type)
-            resp = {
-                "success": True,
-                "filename": filename,
-                "content": result["text"],
-                "engine": "paddleocr_cpu_local",
-                "routed_to": "local_ocr",
-                "pages": result["pages"],
-                "lines": result["lines"],
-                "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
-            }
-            _apply_layout_reconstruction(resp)
-            return resp
-        except Exception as exc:
-            logger.error("本地 OCR 转换失败: %s", exc)
-            if ext == PDF_EXTENSION:
-                try:
-                    return convert_local(file_bytes, filename, ext, t_start)
-                except Exception:
-                    pass
-            raise DocConvertError(f"本地 OCR 失败: {exc}", 503)
-
-    # 兼容模式：尝试外部 OCR 节点，不可达时降级本地
-    ocr_node_up = check_ocr_node() is not None
-    if not ocr_node_up:
-        logger.info("OCR 节点不可达，降级为本地 OCR 识别: %s", filename)
-        ext = Path(filename).suffix.lower()
-        file_type = "pdf" if ext == PDF_EXTENSION else "image"
-        try:
-            result = _do_ocr_local(file_bytes, ext, file_type)
-            resp = {
-                "success": True,
-                "filename": filename,
-                "content": result["text"],
-                "engine": "paddleocr_cpu_local",
-                "routed_to": "local_ocr",
-                "pages": result["pages"],
-                "lines": result["lines"],
-                "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
-            }
-            _apply_layout_reconstruction(resp)
-            return resp
-        except Exception as exc:
-            logger.error("本地 OCR 降级转换失败: %s", exc)
-            if ext == PDF_EXTENSION:
-                try:
-                    return convert_local(file_bytes, filename, ext, t_start)
-                except Exception:
-                    pass
-            raise DocConvertError(f"OCR 节点不可达且本地 OCR 失败: {exc}", 503)
-
-    result, status = forward_to_ocr_node(file_bytes, filename)
-    if result.get("success"):
-        result["routed_to"] = "ocr_node"
-        _apply_layout_reconstruction(result)
-    result["route_elapsed_ms"] = round((time.perf_counter() - t_start) * 1000)
-    if not result.get("success"):
-        raise DocConvertError(result.get("error", "OCR 转换失败"),
-                              status if 400 <= status <= 599 else 502)
+    """图片/扫描 PDF → OCR：节点优先 / 本地优先 / 本地降级（见 _do_ocr_with_fallback）。"""
+    ext = Path(filename).suffix.lower()
+    result = _do_ocr_with_fallback(file_bytes, filename, ext, t_start)
+    _apply_layout_reconstruction(result)
     return result
+
+
+# ---- 路由逻辑 ----
+def _route_conversion(content: bytes, filename: str, ext: str,
+                       crop: Optional[Dict[str, float]],
+                       t_start: float) -> Dict[str, Any]:
+    """按扩展名路由到对应的转换逻辑，返回结果 dict。"""
+    if ext in LOCAL_ONLY_EXTENSIONS:
+        result = convert_local(content, filename, ext, t_start)
+        if crop is not None and ext != PDF_EXTENSION:
+            result["crop_ignored"] = "办公格式不支持区域裁剪，已转换整份文件"
+        return result
+
+    if ext in OCR_ONLY_EXTENSIONS:
+        return _route_image_conversion(content, filename, ext, crop, t_start)
+
+    if ext == PDF_EXTENSION:
+        return _route_pdf_conversion(content, filename, crop, t_start)
+
+    raise DocConvertError(f"不支持的文件格式 '{ext}'", 400)
+
+
+def _route_image_conversion(content: bytes, filename: str, ext: str,
+                             crop: Optional[Dict[str, float]],
+                             t_start: float) -> Dict[str, Any]:
+    """图片格式 → 裁剪（可选） → OCR。"""
+    if crop is not None:
+        try:
+            content = crop_image_bytes(content, crop)
+        except Exception as exc:
+            raise DocConvertError(f"裁剪图片失败: {exc}") from exc
+    result = convert_ocr(content, filename, t_start)
+    if crop is not None and result.get("success"):
+        result["crop_applied"] = True
+    return result
+
+
+def _route_pdf_conversion(content: bytes, filename: str,
+                           crop: Optional[Dict[str, float]],
+                           t_start: float) -> Dict[str, Any]:
+    """PDF → 分类（文本型 / 扫描型） → 对应转换路径。"""
+    if classify_pdf(content) == "text":
+        if crop is not None:
+            return {
+                "success": True,
+                "filename": filename,
+                "content": crop_pdf_text(content, crop),
+                "engine": "poppler_crop",
+                "routed_to": "local",
+                "crop_applied": True,
+                "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
+            }
+        return convert_local(content, filename, PDF_EXTENSION, t_start)
+    # 扫描型 PDF
+    if crop is not None:
+        return _convert_ocr_cropped_pdf(content, filename, crop, t_start)
+    return convert_ocr(content, filename, t_start)
 
 
 # ---- 统一转换入口 ----
 def convert_document(content: bytes, filename: str, crop: Optional[Dict[str, float]],
-                     output_format: str = "md", t_start: Optional[float] = None) -> Dict[str, Any]:
+                     output_format: str = "md",
+                     t_start: Optional[float] = None) -> Dict[str, Any]:
     """统一转换入口。按扩展名自动路由，返回转换结果 dict（含 content / base64 内容）。"""
     output_format = validate_output_format(output_format)
     t_start = t_start or time.perf_counter()
     task_started()
     try:
+        ext = Path(filename).suffix.lower()
+        if not ext:
+            raise DocConvertError("文件缺少扩展名，无法判断格式")
+
         file_size_mb = len(content) / (1024 * 1024)
         if file_size_mb > config.CONVERT_MAX_MB:
             raise DocConvertError(
                 f"文件过大（{file_size_mb:.1f}MB），上限 {config.CONVERT_MAX_MB}MB", 413)
 
-        ext = Path(filename).suffix.lower()
-        if not ext:
-            raise DocConvertError("文件缺少扩展名，无法判断格式")
         if ext == ".docx" and output_format == "docx":
             raise DocConvertError(
                 "源文件是 .docx，再选 docx 输出没有意义（会先转 Markdown 再重建，"
                 "原始排版/图片/格式必然丢失）；请直接使用原文件，或改选 md/txt")
 
-        if ext in LOCAL_ONLY_EXTENSIONS:
-            result = convert_local(content, filename, ext, t_start)
-            if crop is not None:
-                result["crop_ignored"] = "办公格式不支持区域裁剪，已转换整份文件"
-        elif ext in OCR_ONLY_EXTENSIONS:
-            if crop is not None:
-                try:
-                    content = crop_image_bytes(content, crop)
-                except Exception as exc:
-                    raise DocConvertError(f"裁剪图片失败: {exc}")
-            result = convert_ocr(content, filename, t_start)
-            if crop is not None and result.get("success"):
-                result["crop_applied"] = True
-        elif ext == PDF_EXTENSION:
-            if classify_pdf(content) == "text":
-                if crop is not None:
-                    result = {
-                        "success": True,
-                        "filename": filename,
-                        "content": crop_pdf_text(content, crop),
-                        "engine": "pdfplumber_crop",
-                        "routed_to": "local",
-                        "crop_applied": True,
-                    }
-                else:
-                    result = convert_local(content, filename, ext, t_start)
-            else:
-                if crop is not None:
-                    result = _convert_ocr_cropped_pdf(content, filename, crop, t_start)
-                else:
-                    result = convert_ocr(content, filename, t_start)
-        else:
-            raise DocConvertError(f"不支持的文件格式 '{ext}'")
-
+        result = _route_conversion(content, filename, ext, crop, t_start)
+        result.setdefault("file_size_mb", round(file_size_mb, 2))
         result = apply_output_format(result, output_format, filename)
         record_conversion_metrics(True, round((time.perf_counter() - t_start) * 1000))
         return result
@@ -1021,7 +1046,7 @@ def apply_output_format(result: Dict[str, Any], output_format: str,
         try:
             docx_bytes, docx_engine = markdown_to_docx_bytes(content)
         except Exception as exc:
-            raise DocConvertError(f"生成 docx 失败: {exc}", 500)
+            raise DocConvertError(f"生成 docx 失败: {exc}", 500) from exc
         result["output_filename"] = f"{base_name}.docx"
         result["mime_type"] = ("application/vnd.openxmlformats-officedocument"
                                ".wordprocessingml.document")

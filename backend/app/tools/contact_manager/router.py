@@ -2,6 +2,7 @@ import os
 import json
 import re
 import shutil
+import uuid
 from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Header, Depends
@@ -44,17 +45,26 @@ init_db()
 
 # ================= 鉴权与项目辅助函数 =================
 
-def _verify_project(cursor, project_id: int, password: Optional[str] = None) -> dict:
-    """验证项目是否存在，以及密码是否正确（若提供了密码）"""
+def _verify_project(cursor, project_id: int, password: Optional[str]) -> dict:
+    """验证项目存在且密码正确。
+
+    密码是项目的唯一访问控制，缺失与错误同样拒绝——以前这里是
+    ``if password is not None``，不传 X-Project-Password 就能直接放行。
+    """
     cursor.execute("SELECT id, name, password_hash, description, created_at, exported_at FROM projects WHERE id = ?", (project_id,))
     row = cursor.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="项目不存在或已被删除")
     proj = dict(row)
-    if password is not None:
-        if not verify_password(password, proj["password_hash"]):
-            raise HTTPException(status_code=401, detail="项目密码错误，访问受限")
+    if not password or not verify_password(password, proj["password_hash"]):
+        raise HTTPException(status_code=401, detail="项目密码错误，访问受限")
     return proj
+
+
+def _safe_name_part(value: str, fallback: str = "project") -> str:
+    """把用户可控文本压成文件名片段：去掉分隔符与 Windows 非法字符。"""
+    cleaned = re.sub(r"[^\w\-]+", "_", value or "").strip("_")
+    return cleaned[:60] or fallback
 
 def get_project_auth(
     x_project_id: Optional[int] = Header(None, alias="X-Project-Id"),
@@ -1354,9 +1364,14 @@ async def export_contacts_excel(
         row_vals = [e.get(k, "") for k in field_keys]
         ws.append(row_vals)
 
-    export_filename = f"{proj['name']}_ContactBook_{version_info['version_date']}.xlsx"
-    export_path = config.OUTPUT_DIR / export_filename
+    # 项目名来自用户输入，不能直接拼进路径（曾可被 ../../ 逃出 OUTPUT_DIR）。
+    # 内容文件用随机名，避免同名项目并发导出互相覆盖；下载名只影响浏览器保存的文件。
+    export_filename = (
+        f"{_safe_name_part(proj['name'])}_ContactBook_"
+        f"{_safe_name_part(version_info['version_date'], 'unknown')}.xlsx"
+    )
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    export_path = config.OUTPUT_DIR / f"{uuid.uuid4().hex}.xlsx"
     wb.save(export_path)
 
     return FileResponse(

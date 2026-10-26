@@ -89,7 +89,10 @@ if config.STATIC_DIR.exists():
     async def spa_fallback(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not Found")
-        target = config.STATIC_DIR / full_path if full_path else config.STATIC_DIR / "index.html"
-        if full_path and target.is_file():
+        # full_path 来自 URL，可能含 `..`、百分号编码或 Windows 绝对路径（C:/…）。
+        # 拼接后必须 resolve 并确认仍在 STATIC_DIR 内，否则这里会变成任意文件读取。
+        root = config.STATIC_DIR.resolve()
+        target = (root / full_path).resolve() if full_path else root / "index.html"
+        if full_path and target.is_relative_to(root) and target.is_file():
             return FileResponse(target)
-        return FileResponse(config.STATIC_DIR / "index.html")
+        return FileResponse(root / "index.html")

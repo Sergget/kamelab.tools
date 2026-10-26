@@ -6,6 +6,7 @@
 
 import json
 import logging
+import re
 import shutil
 import threading
 import time
@@ -16,6 +17,14 @@ from typing import Any, Dict, Optional
 from . import config
 
 logger = logging.getLogger(__name__)
+
+# 所有对外的 id 都来自 uuid4().hex。拼路径前必须校验格式，
+# 否则 `..`、通配符或绝对路径会让 get_work_dir / get_job 指到目录之外。
+_ID_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def is_valid_id(value: str) -> bool:
+    return bool(value) and _ID_RE.fullmatch(value) is not None
 
 
 def _ensure_dirs() -> None:
@@ -28,6 +37,8 @@ def new_id() -> str:
 
 
 def save_upload(file_id: str, ext: str, content: bytes, original_name: str) -> Path:
+    if not is_valid_id(file_id):
+        raise ValueError(f"非法 upload id: {file_id!r}")
     _ensure_dirs()
     path = config.UPLOAD_DIR / (file_id + ext)
     path.write_bytes(content)
@@ -39,6 +50,8 @@ def save_upload(file_id: str, ext: str, content: bytes, original_name: str) -> P
 
 
 def get_upload(file_id: str) -> Optional[Path]:
+    if not is_valid_id(file_id):
+        return None
     for path in config.UPLOAD_DIR.glob(file_id + ".*"):
         if path.suffix.lower() in config.ALLOWED_EXTENSIONS:
             return path
@@ -46,6 +59,8 @@ def get_upload(file_id: str) -> Optional[Path]:
 
 
 def get_upload_meta(file_id: str) -> Dict[str, Any]:
+    if not is_valid_id(file_id):
+        return {}
     meta_path = config.UPLOAD_DIR / (file_id + ".json")
     if meta_path.exists():
         try:
@@ -63,6 +78,8 @@ def get_upload_meta(file_id: str) -> Dict[str, Any]:
 
 def new_work_dir(file_id: str, names: Dict[str, str]) -> Path:
     """创建 file_id 工作区，返回 {逻辑名 -> 文件名} 的目录路径。"""
+    if not is_valid_id(file_id):
+        raise ValueError(f"非法 work id: {file_id!r}")
     _ensure_dirs()
     work_dir = config.UPLOAD_DIR / "work" / file_id
     if work_dir.exists():
@@ -74,11 +91,15 @@ def new_work_dir(file_id: str, names: Dict[str, str]) -> Path:
 
 
 def get_work_dir(file_id: str) -> Optional[Path]:
+    if not is_valid_id(file_id):
+        return None
     work_dir = config.UPLOAD_DIR / "work" / file_id
     return work_dir if work_dir.is_dir() else None
 
 
 def save_work_file(file_id: str, filename: str, content: bytes) -> Path:
+    if not is_valid_id(file_id):
+        raise ValueError(f"非法 work id: {file_id!r}")
     _ensure_dirs()
     work_dir = config.UPLOAD_DIR / "work" / file_id
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -88,6 +109,8 @@ def save_work_file(file_id: str, filename: str, content: bytes) -> Path:
 
 
 def read_work_file(file_id: str, filename: str) -> Optional[bytes]:
+    if not is_valid_id(file_id):
+        return None
     work_dir = config.UPLOAD_DIR / "work" / file_id
     path = work_dir / filename
     if path.is_file():
@@ -115,6 +138,8 @@ def read_work_json(file_id: str, filename: str) -> Dict[str, Any]:
 def save_job(file_id: str, files: Dict[str, bytes], zip_bytes: Optional[bytes],
              manifest: Dict[str, Any]) -> Path:
     """把拆分产物写入 output 目录，并返回 job 目录。"""
+    if not is_valid_id(file_id):
+        raise ValueError(f"非法 job id: {file_id!r}")
     _ensure_dirs()
     job_dir = config.OUTPUT_DIR / file_id
     if job_dir.exists():
@@ -131,6 +156,8 @@ def save_job(file_id: str, files: Dict[str, bytes], zip_bytes: Optional[bytes],
 
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    if not is_valid_id(job_id):
+        return None
     job_dir = config.OUTPUT_DIR / job_id
     manifest_path = job_dir / "manifest.json"
     if not manifest_path.exists():

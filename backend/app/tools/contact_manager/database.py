@@ -6,7 +6,11 @@ import re
 from contextlib import contextmanager
 from typing import Optional
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../data/contact_manager.db"))
+from ... import config
+
+# 库文件跟随 LAB_TOOLS_DATA_DIR（默认仍是 backend/data），
+# 否则测试与多实例部署都会写到同一个硬编码路径上。
+DB_PATH = os.path.abspath(str(config.DATA_DIR / "contact_manager.db"))
 
 _PBKDF2_ITERATIONS = 100_000
 _SALT_BYTES = 16

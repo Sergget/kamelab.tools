@@ -38,7 +38,9 @@ def _friendly_error(raw: str) -> str:
     for token, message in _INTERNAL_ERROR_HINTS:
         if token in text:
             return message
+    # Windows 盘符路径与 POSIX 绝对路径都要脱敏：后者在生产（Ubuntu）才是常态
     cleaned = re.sub(r"[A-Za-z]:\\[^\s'\"]+", "临时文件", text)
+    cleaned = re.sub(r"(?<![\w.])/(?:[\w.\-]+/)+[\w.\-]+", "临时文件", cleaned)
     return cleaned or "PDF 转换失败"
 
 

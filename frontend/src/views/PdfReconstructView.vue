@@ -8,7 +8,7 @@
     <el-alert
       v-if="kernelDown"
       title="转换内核未就绪"
-      :description="health.detail || '后端未安装 kame-officetools-core，本工具暂时不可用'"
+      :description="health.detail || '后端未安装 kame-officetools，本工具暂时不可用'"
       type="error"
       show-icon
       :closable="false"

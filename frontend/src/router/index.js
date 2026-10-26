@@ -40,6 +40,12 @@ const router = createRouter({
       meta: { title: '文档汇编' },
     },
     {
+      path: '/tools/pdf-reconstruct',
+      name: 'pdf-reconstruct',
+      component: () => import('../views/PdfReconstructView.vue'),
+      meta: { title: 'PDF 高保真转 Word' },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

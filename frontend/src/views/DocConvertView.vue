@@ -129,10 +129,16 @@
 
       <pre v-if="result.content" class="result-pre">{{ result.content }}</pre>
       <el-result
-        v-else
+        v-else-if="result.output_format === 'docx' && result.job_id"
         icon="success"
         title="已生成 Word 文档"
         :sub-title="`引擎：${result.docx_engine || 'python-docx-fallback'}，点击下方按钮下载`"
+      />
+      <el-result
+        v-else
+        icon="warning"
+        title="转换结果为空"
+        :sub-title="emptyResultHint"
       />
 
       <div class="result-actions">
@@ -202,6 +208,15 @@ const isImage = computed(() => {
 const isPdf = computed(() => fileInfo.value?.ext === '.pdf')
 const isDocxSource = computed(() => fileInfo.value?.ext === '.docx')
 const isOcrNodeDown = computed(() => ocrNodeDown.value)
+
+const emptyResultHint = computed(() => {
+  const r = result.value
+  if (!r) return ''
+  if (isPdf.value && ocrNodeDown.value) {
+    return '该 PDF 没有可提取的文字层（可能是扫描件）。请先启动 OCR 节点后再转换'
+  }
+  return '文件中没有提取到文本内容，请检查文件是否有效'
+})
 
 const ocrStatusTag = computed(() => {
   if (isImage.value || isPdf.value) {

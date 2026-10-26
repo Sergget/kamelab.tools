@@ -245,6 +245,46 @@ def test_convert_docx_endpoint_real_file():
     assert "接口测试" in (data["content"] or "")
     assert "这是正文内容" in (data["content"] or "")
 
+# ---- 空内容不再假成功 ----
+# 扫描件没有文字层时 convert_local 返回空字符串而不抛错，旧逻辑会包成
+# {"success": True, "content": ""} 交给前端，用户看到"转换成功"却什么都没有。
+
+def test_ensure_pdf_text_extracted_raises_on_empty():
+    with pytest.raises(service.DocConvertError) as ei:
+        service._ensure_pdf_text_extracted({"success": True, "content": ""})
+    assert ei.value.status == 422
+
+
+def test_ensure_pdf_text_extracted_raises_on_whitespace():
+    with pytest.raises(service.DocConvertError) as ei:
+        service._ensure_pdf_text_extracted({"success": True, "content": " \n\t\r\n "})
+    assert ei.value.status == 422
+
+
+def test_ensure_pdf_text_extracted_passes_through():
+    payload = {"success": True, "content": "正文"}
+    assert service._ensure_pdf_text_extracted(payload) is payload
+
+
+def test_convert_text_pdf_empty_local_content_raises(monkeypatch):
+    """文本型 PDF 但提取结果为空 → 422，而不是 success + 空内容。"""
+    monkeypatch.setattr(service, "classify_pdf", lambda _: "text")
+    monkeypatch.setattr(service, "convert_local",
+                        lambda *a, **k: {"success": True, "content": ""})
+    with pytest.raises(service.DocConvertError) as ei:
+        service.convert_document(b"%PDF-1.4 fake", "a.pdf", None, "md")
+    assert ei.value.status == 422
+
+
+def test_convert_crop_without_text_raises(monkeypatch):
+    """裁剪区域内没有文字 → 422，而不是 success + 空内容。"""
+    monkeypatch.setattr(service, "classify_pdf", lambda _: "text")
+    monkeypatch.setattr(service, "crop_pdf_text", lambda *a, **k: "  \n ")
+    crop = {"unit": "ratio", "x": 0.1, "y": 0.1, "width": 0.5, "height": 0.5}
+    with pytest.raises(service.DocConvertError) as ei:
+        service.convert_document(b"%PDF-1.4 fake", "a.pdf", crop, "md")
+    assert ei.value.status == 422
+
 
 # ---- HTTP 接口 ----
 

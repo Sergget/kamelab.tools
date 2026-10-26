@@ -46,6 +46,14 @@ TOOLS = [
         "route": "/tools/doc-compile",
         "keywords": ["doc", "docx", "docm", "wps", "汇编", "合并", "目录", "Word", "批量"],
     },
+    {
+        "id": "pdf-reconstruct",
+        "name": "PDF 高保真转 Word",
+        "description": "上传 PDF，还原版面结构后输出可编辑的 Word 文档；数字版直取文字层，扫描件自动走 OCR。",
+        "icon": "Tickets",
+        "route": "/tools/pdf-reconstruct",
+        "keywords": ["pdf", "docx", "word", "转换", "扫描件", "ocr", "版面还原", "高保真"],
+    },
 ]
 
 

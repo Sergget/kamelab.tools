@@ -32,6 +32,10 @@ psutil>=5.9
 # PDF 文本提取与渲染：由系统包 poppler-utils 提供（pdftotext / pdftoppm / pdfinfo），
 # 不通过 pip 安装：Ubuntu 执行 `sudo apt install poppler-utils`
 # docx 输出优先使用 pandoc（`sudo apt install pandoc`），缺失时自动降级 python-docx
+#
+# 注意：pdf-reconstruct 的转换内核 kame-officetools 是**本地路径包**，不在本文件声明，
+# 需单独 `pip install -e`（见 docs/pdf-reconstruct.md）。内核的 PyMuPDF 只是 extras，
+# 本文件因此不含任何 AGPL 组件。
 
 # ---- OCR 引擎 ----
 # RapidOCR (ONNXRuntime) - 无 AVX 要求，CPU 推理

@@ -928,6 +928,19 @@ def convert_local(file_bytes: bytes, filename: str, ext: str,
 
 
 # ---- OCR 转换 ----
+def _ensure_pdf_text_extracted(result: Dict[str, Any]) -> Dict[str, Any]:
+    """文本提取回落的收尾检查。
+
+    扫描件没有文字层时 convert_local 返回空字符串而不抛错，
+    这里改成明确报错，避免前端把空结果当成转换成功。
+    """
+    if not (result.get("content") or "").strip():
+        raise DocConvertError(
+            "PDF 中没有可提取的文字层（可能是扫描件），OCR 也未识别出内容。"
+            "请确认 OCR 节点已上线后重试", 422)
+    return result
+
+
 def convert_ocr(file_bytes: bytes, filename: str, t_start: float) -> Dict[str, Any]:
     """图片/扫描 PDF → OCR：节点优先 / 本地优先 / 本地降级（见 _do_ocr_with_fallback）。"""
     ext = Path(filename).suffix.lower()
@@ -977,16 +990,23 @@ def _route_pdf_conversion(content: bytes, filename: str,
     """PDF → 分类（文本型 / 扫描型） → 对应转换路径。"""
     if classify_pdf(content) == "text":
         if crop is not None:
+            cropped = crop_pdf_text(content, crop)
+            if not cropped.strip():
+                raise DocConvertError(
+                    "裁剪区域内没有文字。请调整裁剪范围；"
+                    "若原文件是扫描件，请确认 OCR 节点已上线", 422)
             return {
                 "success": True,
                 "filename": filename,
-                "content": crop_pdf_text(content, crop),
+                "content": cropped,
                 "engine": "poppler_crop",
                 "routed_to": "local",
                 "crop_applied": True,
                 "elapsed_ms": round((time.perf_counter() - t_start) * 1000),
             }
-        return convert_local(content, filename, PDF_EXTENSION, t_start)
+        # 文本型 PDF 却提取出空内容（伪文本层）→ 422，不要当成功返回
+        return _ensure_pdf_text_extracted(
+            convert_local(content, filename, PDF_EXTENSION, t_start))
     # 扫描型 PDF
     if crop is not None:
         return _convert_ocr_cropped_pdf(content, filename, crop, t_start)

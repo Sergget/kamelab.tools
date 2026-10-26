@@ -40,6 +40,7 @@ _TOOL_ROUTER_MODULES = {
     "excel-diff": "tools.excel_diff.router",
     "contact-manager": "tools.contact_manager.router",
     "doc-compile": "tools.doc_compile.router",
+    "pdf-reconstruct": "tools.pdf_reconstruct.router",
 }
 
 # 实际挂载成功的工具 id 集合，用于 /api/tools 只对外通告真正可用的工具

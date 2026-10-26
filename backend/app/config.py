@@ -82,6 +82,11 @@ COMPILE_CONVERT_TIMEOUT = int(_env("LAB_TOOLS_COMPILE_CONVERT_TIMEOUT", default=
 # 支持的输入扩展名（.wps 按魔数分类后再分派；分类为 zip 的 .wps 直接按 docx 处理）
 COMPILE_ALLOWED_EXTENSIONS = {".doc", ".docm", ".docx", ".wps", ".rtf", ".txt"}
 
+# ---- PDF 高保真转 Word 工具（pdf-reconstruct）----
+RECONSTRUCT_MAX_MB = int(os.getenv("LAB_TOOLS_RECONSTRUCT_MAX_MB", "50"))
+# 0 = 不限页数；扫描件走 OCR 时建议设小值，避免单个请求跑太久
+RECONSTRUCT_MAX_PAGES = int(os.getenv("LAB_TOOLS_RECONSTRUCT_MAX_PAGES", "0"))
+
 # ---- 节点身份（健康检查展示用）----
 NODE_NAME = _env("LAB_TOOLS_NODE_NAME", default=socket.gethostname())
 NODE_ROLE = _env("LAB_TOOLS_NODE_ROLE", default="main")

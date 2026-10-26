@@ -132,6 +132,19 @@ export async function uploadDocCompile(files) {
   }
 }
 
+// ---- PDF 高保真转 Word（pdf-reconstruct）----
+
+export async function convertPdfToDocx(file) {
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const { data } = await http.post('/tools/pdf-reconstruct/convert', form)
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}
+
 // 文件详情（含惰性计算的 page_count）
 export async function getDocCompileFileInfo(fileId) {
   try {
@@ -223,6 +236,21 @@ export async function getDocCompileFormats() {
 export async function getDocCompileHealth() {
   try {
     const { data } = await http.get('/tools/doc-compile/health')
+    return data
+  } catch (e) {
+    throw messageError(e)
+  }
+}
+
+// ---- PDF 高保真转 Word（pdf-reconstruct）----
+
+export function pdfReconstructDownloadUrl(jobId) {
+  return `/api/tools/pdf-reconstruct/download/${jobId}`
+}
+
+export async function getPdfReconstructHealth() {
+  try {
+    const { data } = await http.get('/tools/pdf-reconstruct/health')
     return data
   } catch (e) {
     throw messageError(e)

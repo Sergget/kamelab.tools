@@ -71,8 +71,18 @@ def kernel_available() -> bool:
 
 
 def _sanitize_stem(filename: str) -> str:
-    """把上传文件名压成安全的输出主名（去掉路径分隔符与 Windows 非法字符）。"""
-    stem = Path(filename or "").stem.strip() or "document"
+    """把上传文件名压成安全的输出主名（去掉路径分隔符与 Windows 非法字符）。
+
+    注意：这里**先把反斜杠统一成斜杠**，再取 stem。原因是 `Path(...).stem`
+    的行为随平台变：
+      - Windows（ntpath）把 `/` 和 `\\` 都当路径分隔符
+      - Linux（posixpath）只把 `/` 当分隔符
+    于是 `a/b\\c.pdf` 这类输入在 Windows 上得到 `c`、在 Linux 上得到 `b_c`。
+    生产环境是 Ubuntu，若不统一，同一份上传在两处会生成不同的输出文件名，
+    而本地（Windows）测试又验不出这个差异——CI 首次在 Linux 上跑就抓到了。
+    """
+    normalized = (filename or "").replace("\\", "/")
+    stem = Path(normalized).stem.strip() or "document"
     for ch in '<>:"/\\|?*':
         stem = stem.replace(ch, "_")
     stem = stem.strip(" .")

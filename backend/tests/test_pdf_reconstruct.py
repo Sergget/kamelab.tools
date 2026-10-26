@@ -1,6 +1,6 @@
 """pdf-reconstruct 工具接口测试。
 
-转换链路依赖 kame-officetools-core 内核，未安装时相关用例跳过；
+转换链路依赖 kame-officetools 内核，未安装时相关用例跳过；
 不依赖内核的分支（参数校验、下载 404、健康探活）始终执行。
 """
 
@@ -152,7 +152,7 @@ def test_sanitize_stem_caps_length():
 
 
 def test_convert_digital_pdf_returns_docx():
-    pytest.importorskip("kame_officetools_core", reason="未安装转换内核")
+    pytest.importorskip("kame_officetools", reason="未安装转换内核")
     pdf = _make_pdf(["甲方应在验收后十个工作日内付款。"])
 
     resp = client.post(
@@ -175,7 +175,7 @@ def test_convert_digital_pdf_returns_docx():
 
 
 def test_convert_splits_chinese_paragraphs():
-    pytest.importorskip("kame_officetools_core", reason="未安装转换内核")
+    pytest.importorskip("kame_officetools", reason="未安装转换内核")
     pdf = _make_pdf(
         ["一、项目背景", "本合同项下的服务范围包括三项。", "二、付款方式", "甲方应在十个工作日内付款。"]
     )
@@ -190,7 +190,7 @@ def test_convert_splits_chinese_paragraphs():
 
 
 def test_convert_blank_pdf_returns_422_not_fake_success():
-    pytest.importorskip("kame_officetools_core", reason="未安装转换内核")
+    pytest.importorskip("kame_officetools", reason="未安装转换内核")
     pdf = _make_pdf([])
 
     resp = client.post(CONVERT_URL, files={"file": ("空白.pdf", pdf, "application/pdf")})

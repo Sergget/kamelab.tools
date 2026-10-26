@@ -1,6 +1,6 @@
 # Lab Tools — 开发协作指南
 
-自托管的办公文件处理工具箱。FastAPI 后端（`backend/`）+ Vue 3 前端（`frontend/`），另有独立 OCR 节点（`ocr_server/`）与部署脚本（`deploy/`）。PDF 高保真转 Word 的转换逻辑在**外部内核包** `kame-officetools-core`（`../kame-officetools-core`），不在本仓库。
+自托管的办公文件处理工具箱。FastAPI 后端（`backend/`）+ Vue 3 前端（`frontend/`），另有独立 OCR 节点（`ocr_server/`）与部署脚本（`deploy/`）。PDF 高保真转 Word 的转换逻辑在**外部内核包** `kame-officetools`（`../kame-officetools`），不在本仓库。
 
 ## 调度规则（主 agent 用）
 

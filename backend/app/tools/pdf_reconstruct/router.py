@@ -103,5 +103,5 @@ async def health():
         "kernel_version": service.kernel_version(),
         "max_file_size_mb": config.RECONSTRUCT_MAX_MB,
         "max_pages": config.RECONSTRUCT_MAX_PAGES or None,
-        "detail": "" if available else "kame-officetools-core 未安装，本工具不可用",
+        "detail": "" if available else "kame-officetools 未安装，本工具不可用",
     }

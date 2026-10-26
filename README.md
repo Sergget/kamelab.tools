@@ -95,21 +95,21 @@ sudo bash ./deploy_ubuntu.sh
 
 ```bash
 cd backend
-.venv/bin/python -m pip install -e ../../kame-officetools-core
+.venv/bin/python -m pip install -e ../../kame-officetools
 ```
 
 若 `pip install -e` 因内网索引不可达而挂起，可用等价手段——在 venv 的 `site-packages` 下写一个 `.pth` 文件，内容为内核 `src` 的绝对路径（单行、UTF-8 无 BOM、不带结尾换行）：
 
 ```text
-# backend/.venv/Lib/site-packages/kame_officetools_core_dev.pth
-E:\Code\Kamelab\apps\kame-officetools-core\src
+# backend/.venv/Lib/site-packages/kame_officetools_dev.pth
+E:\Code\Kamelab\apps\kame-officetools\src
 ```
 
 验证：
 
 ```bash
 cd backend
-.venv/bin/python -c "import kame_officetools_core as m; print(m.__version__)"
+.venv/bin/python -c "import kame_officetools as m; print(m.__version__)"
 curl http://127.0.0.1:8000/api/tools/pdf-reconstruct/health
 # status: UP  → 内核就绪
 # status: DOWN → 未安装，detail 会说明原因
@@ -119,7 +119,7 @@ curl http://127.0.0.1:8000/api/tools/pdf-reconstruct/health
 
 ## 本地开发
 
-Python 版本要求：**后端 3.10 – 3.13**（推荐 3.12；3.14 暂不支持，`pandas 2.x` / `pymupdf` 尚无对应 wheel）；**PDF 高保真转 Word 需 3.11+**（内核 `kame-officetools-core` 声明 `requires-python >= 3.11`）；**OCR 节点 3.11**（paddlepaddle 2.6.2 对应版本，详见 [docs/ocr-node.md](docs/ocr-node.md)）。
+Python 版本要求：**后端 3.10 – 3.13**（推荐 3.12；3.14 暂不支持，`pandas 2.x` / `pymupdf` 尚无对应 wheel）；**PDF 高保真转 Word 需 3.11+**（内核 `kame-officetools` 声明 `requires-python >= 3.11`）；**OCR 节点 3.11**（paddlepaddle 2.6.2 对应版本，详见 [docs/ocr-node.md](docs/ocr-node.md)）。
 
 ```bash
 # 后端（Python 3.10 - 3.13；要用 PDF 高保真转 Word 则需 3.11+）
@@ -127,7 +127,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate        # Windows；Linux 用 .venv/bin/activate
 pip install -r requirements.txt
-pip install -e ../../kame-officetools-core   # PDF→Word 内核，可选；缺了只是该工具不可用
+pip install -e ../../kame-officetools   # PDF→Word 内核，可选；缺了只是该工具不可用
 python run.py                 # http://127.0.0.1:8000
 
 # OCR 节点 CPU 版（RapidOCR）
@@ -184,7 +184,7 @@ cd backend
 > 若某工具依赖缺失（例如未安装 OCR 相关依赖）导致导入失败，可用 `LAB_TOOLS_ENABLED` 只启用需要的工具再跑测试：
 > `LAB_TOOLS_ENABLED="excel-split,excel-diff,doc-convert,pdf-reconstruct" .venv/bin/python -m pytest`（`backend/app/main.py` 已支持按工具惰性导入路由）。
 >
-> `tests/test_pdf_reconstruct.py` 里依赖内核的 3 条用例用 `importorskip` 保护：没装 `kame-officetools-core` 时自动跳过。实测无内核 **70 passed / 3 skipped**，装内核 **73 passed**。
+> `tests/test_pdf_reconstruct.py` 里依赖内核的 3 条用例用 `importorskip` 保护：没装 `kame-officetools` 时自动跳过。实测无内核 **70 passed / 3 skipped**，装内核 **73 passed**。
 
 ---
 
@@ -227,9 +227,9 @@ sudo bash ./deploy_ubuntu.sh nginx      # 只更新 Nginx 配置并 reload
 ```bash
 # 用 backend/.venv —— 它自带 wheel 0.48.0；apps/pdf2docx/venv 缺 wheel，会报 bdist_wheel 不可用
 cd backend
-.venv/bin/python -m pip wheel ../../kame-officetools-core \
+.venv/bin/python -m pip wheel ../../kame-officetools \
     --no-index --no-deps --no-build-isolation -w dist/
-# → dist/kame_officetools_core-0.1.0-py3-none-any.whl（19.1 KB，含 8 个模块 + py.typed）
+# → dist/kame_officetools-0.1.0-py3-none-any.whl（19.1 KB，含 8 个模块 + py.typed）
 ```
 
 > 三个 `--` 参数不是可选的：默认的构建隔离会去索引下 setuptools/wheel，索引不可达时会一直挂着（实测超过 4 分钟无任何输出）。`python -m build` 也可以，但需要额外装 `build` 包，本机三个环境都没有。
@@ -238,7 +238,7 @@ cd backend
 
 ```bash
 sudo -u www-data /var/www/lab-tools/backend/.venv/bin/pip install --no-deps \
-    /tmp/kame_officetools_core-0.1.0-py3-none-any.whl
+    /tmp/kame_officetools-0.1.0-py3-none-any.whl
 sudo systemctl restart lab-tools
 curl http://127.0.0.1:8000/api/tools/pdf-reconstruct/health    # 期望 status: UP
 ```

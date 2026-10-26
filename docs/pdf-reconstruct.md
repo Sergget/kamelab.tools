@@ -1,6 +1,6 @@
 # PDF 高保真转 Word（pdf-reconstruct）说明
 
-本文档对应后端工具包 `backend/app/tools/pdf_reconstruct/` 与前端页面 `frontend/src/views/PdfReconstructView.vue`（路由 `/tools/pdf-reconstruct`）。转换逻辑不在本仓库，全部委托给独立内核包 **`kame-officetools-core`**（源码 `../kame-officetools-core`）。
+本文档对应后端工具包 `backend/app/tools/pdf_reconstruct/` 与前端页面 `frontend/src/views/PdfReconstructView.vue`（路由 `/tools/pdf-reconstruct`）。转换逻辑不在本仓库，全部委托给独立内核包 **`kame-officetools`**（源码 `../kame-officetools`）。
 
 ## 和"文档转换"有什么不一样
 
@@ -40,7 +40,7 @@
 
 ```bash
 cd backend
-.venv/bin/python -m pip install -e ../../kame-officetools-core
+.venv/bin/python -m pip install -e ../../kame-officetools
 ```
 
 内核自身只依赖 `pdfplumber` / `pillow` / `numpy`；`pymupdf` 与 `paddleocr` 都是**按需懒加载**——纯数字版 PDF 不需要它们。
@@ -48,8 +48,8 @@ cd backend
 `pip install -e` 因内网索引不可达挂起时，用 `.pth` 等价替代（内容为内核 `src` 绝对路径，单行、UTF-8 无 BOM、不带结尾换行）：
 
 ```text
-# backend/.venv/Lib/site-packages/kame_officetools_core_dev.pth
-E:\Code\Kamelab\apps\kame-officetools-core\src
+# backend/.venv/Lib/site-packages/kame_officetools_dev.pth
+E:\Code\Kamelab\apps\kame-officetools\src
 ```
 
 **内核缺失时的行为**：主服务照常启动，工具仍在 `/api/tools` 列表里，但 `/health` 返回 `DOWN`、转换请求返回 503（detail 会说明内核未安装）。前端在页面顶部显示红色告警并禁用"开始转换"。测试层面 `tests/test_pdf_reconstruct.py` 里依赖内核的 3 条用例会自动 skip（实测无内核 70 passed / 3 skipped，装内核 73 passed）。
@@ -87,7 +87,7 @@ E:\Code\Kamelab\apps\kame-officetools-core\src
 | `pdf_type` | `digital`（有文字层）或 `scanned`（走了 OCR） |
 | `chars` | 提取到的字符数 |
 | `elapsed_ms` | 转换耗时（毫秒） |
-| `engine` | 固定 `kame-officetools-core` |
+| `engine` | 固定 `kame-officetools` |
 | `kernel_version` | 内核版本，如 `0.1.0` |
 
 **没有 `pages` 字段**——内核的 `ProcessResult` 不返回页数，这里不编一个出来。

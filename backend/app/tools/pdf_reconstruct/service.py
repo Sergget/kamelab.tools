@@ -1,6 +1,6 @@
-"""PDF 高保真转 Word 服务：包装 ``kame-officetools-core`` 内核。
+"""PDF 高保真转 Word 服务：包装 ``kame-officetools`` 内核。
 
-内核（``apps/kame-officetools-core``）是从桌面客户端抽出的独立包，负责
+内核（``apps/kame-officetools``）是从桌面客户端抽出的独立包，负责
 数字版/扫描版双路径提取、版面归并与手写 OOXML 写出。本模块只做三件事：
 落临时文件、调内核、把结果整理成 HTTP 层能用的形状。
 
@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 PDF_EXTENSION = ".pdf"
-ENGINE_NAME = "kame-officetools-core"
+ENGINE_NAME = "kame-officetools"
 
 # 内核抛的是裸 Python 异常，直接透给前端既看不懂又会漏临时目录路径。
 # 已知内部错误映射成人话，其余做路径脱敏。
@@ -54,7 +54,7 @@ class ReconstructError(ValueError):
 def kernel_version() -> str:
     """内核版本号；未安装时返回空串（供 health 展示，不抛错）。"""
     try:
-        from kame_officetools_core import __version__
+        from kame_officetools import __version__
     except Exception:
         return ""
     return __version__
@@ -62,7 +62,7 @@ def kernel_version() -> str:
 
 def kernel_available() -> bool:
     try:
-        import kame_officetools_core  # noqa: F401
+        import kame_officetools  # noqa: F401
     except Exception:
         return False
     return True
@@ -95,11 +95,11 @@ def convert_pdf_to_docx(file_bytes: bytes,
         raise ReconstructError("文件为空", 400)
 
     try:
-        from kame_officetools_core import PipelineOptions, process_pdf_folder
+        from kame_officetools import PipelineOptions, process_pdf_folder
     except Exception as exc:  # 未安装内核
         logger.error("PDF 转换内核不可用: %s", exc)
         raise ReconstructError(
-            f"PDF 转换内核不可用（kame-officetools-core 未安装）：{exc}", 503
+            f"PDF 转换内核不可用（kame-officetools 未安装）：{exc}", 503
         ) from exc
 
     t_start = time.perf_counter()

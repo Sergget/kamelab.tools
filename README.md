@@ -95,7 +95,7 @@ sudo bash ./deploy_ubuntu.sh
 
 ```bash
 cd backend
-.venv/bin/python -m pip install -e ../../Kamelab/apps/kame-officetools-core
+.venv/bin/python -m pip install -e ../../kame-officetools-core
 ```
 
 若 `pip install -e` 因内网索引不可达而挂起，可用等价手段——在 venv 的 `site-packages` 下写一个 `.pth` 文件，内容为内核 `src` 的绝对路径（单行、UTF-8 无 BOM、不带结尾换行）：
@@ -127,7 +127,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate        # Windows；Linux 用 .venv/bin/activate
 pip install -r requirements.txt
-pip install -e ../../Kamelab/apps/kame-officetools-core   # PDF→Word 内核，可选；缺了只是该工具不可用
+pip install -e ../../kame-officetools-core   # PDF→Word 内核，可选；缺了只是该工具不可用
 python run.py                 # http://127.0.0.1:8000
 
 # OCR 节点 CPU 版（RapidOCR）
@@ -227,7 +227,7 @@ sudo bash ./deploy_ubuntu.sh nginx      # 只更新 Nginx 配置并 reload
 ```bash
 # 用 backend/.venv —— 它自带 wheel 0.48.0；apps/pdf2docx/venv 缺 wheel，会报 bdist_wheel 不可用
 cd backend
-.venv/bin/python -m pip wheel ../../Kamelab/apps/kame-officetools-core \
+.venv/bin/python -m pip wheel ../../kame-officetools-core \
     --no-index --no-deps --no-build-isolation -w dist/
 # → dist/kame_officetools_core-0.1.0-py3-none-any.whl（19.1 KB，含 8 个模块 + py.typed）
 ```

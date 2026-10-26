@@ -1,6 +1,6 @@
 # PDF 高保真转 Word（pdf-reconstruct）说明
 
-本文档对应后端工具包 `backend/app/tools/pdf_reconstruct/` 与前端页面 `frontend/src/views/PdfReconstructView.vue`（路由 `/tools/pdf-reconstruct`）。转换逻辑不在本仓库，全部委托给独立内核包 **`kame-officetools-core`**（源码 `../Kamelab/apps/kame-officetools-core`）。
+本文档对应后端工具包 `backend/app/tools/pdf_reconstruct/` 与前端页面 `frontend/src/views/PdfReconstructView.vue`（路由 `/tools/pdf-reconstruct`）。转换逻辑不在本仓库，全部委托给独立内核包 **`kame-officetools-core`**（源码 `../kame-officetools-core`）。
 
 ## 和"文档转换"有什么不一样
 
@@ -40,7 +40,7 @@
 
 ```bash
 cd backend
-.venv/bin/python -m pip install -e ../../Kamelab/apps/kame-officetools-core
+.venv/bin/python -m pip install -e ../../kame-officetools-core
 ```
 
 内核自身只依赖 `pdfplumber` / `pillow` / `numpy`；`pymupdf` 与 `paddleocr` 都是**按需懒加载**——纯数字版 PDF 不需要它们。
@@ -115,4 +115,4 @@ E:\Code\Kamelab\apps\kame-officetools-core\src
 - [文档转换工具（doc-convert）](doc-convert.md)
 - [OCR 节点（PaddleOCR）部署与依赖](ocr-node.md)
 - [README（工具总览 / 部署 / 全部环境变量）](../README.md)
-- 内核设计与迁移记录：`../Kamelab/docs/branch-merge-and-desktop-diet.md` §10.4–§10.8
+- 内核设计与迁移记录：`../../docs/branch-merge-and-desktop-diet.md` §10.4–§10.8

@@ -1,0 +1,50 @@
+MIT License
+
+Copyright (c) 2026
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+第三方组件与许可说明
+================================================================================
+
+本仓库代码为 MIT。以下为**运行期引入但不受本许可证覆盖**的第三方组件，
+分发或商用前请自行确认各自条款（完整清单见各 requirements 文件）：
+
+Python 包（backend/requirements.txt）
+- fastapi / uvicorn / pydantic       MIT / BSD-3-Clause
+- pandas                             BSD-3-Clause
+- openpyxl / xlrd                    MIT / BSD
+- mammoth / python-pptx / python-docx  MIT / BSD-3-Clause
+- rapidocr_onnxruntime, onnxruntime  Apache-2.0
+- paddlepaddle / paddleocr           Apache-2.0
+- numpy                              BSD-3-Clause
+
+系统二进制（不通过 pip 安装，需自行 `apt install`）
+- poppler-utils（pdftotext/pdftoppm/pdfinfo）  GPL-2.0 —— **以独立进程调用**，
+  不与本仓库代码链接，通常不构成衍生作品；若改为链接库方式使用需重新评估。
+- pandoc（可选，Markdown→docx 优先引擎）      GPL-2.0-or-later —— 同样以子进程调用。
+- LibreOffice（可选，文档汇编的 .doc 转换/预览）  MPL-2.0
+
+转换内核
+- kame-officetools（本工作区私有包，不在本仓库）  见其自身 LICENSE；
+  其 PyMuPDF 仅为 extras（AGPL-3.0），**本仓库不引入 PyMuPDF**。
+
+前端（frontend/package.json）
+- Vue 3 / Vite / Element Plus / axios / cropperjs  MIT

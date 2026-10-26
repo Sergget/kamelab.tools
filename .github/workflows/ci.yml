@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端 pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"          # paddlepaddle 2.6.2 无 3.12+ 轮子，后端锁 3.11
+          cache: pip
+
+      - name: 安装后端依赖（CI 子集）
+        # 不装 requirements.txt 全量：其中 paddlepaddle-gpu / paddleocr 体积大且
+        # 需要 CUDA，而本仓库测试对 OCR 引擎是惰性依赖（缺失即 skip）。
+        # 这里显式列出测试真正用到的包，实测 146 passed / 7 skipped（54s）。
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            fastapi uvicorn python-multipart "pandas<3.0" openpyxl xlrd \
+            pytest httpx mammoth python-pptx python-docx pillow requests psutil numpy
+
+      - name: 安装转换内核（私有仓库，需 secrets.KAMELAB_KERNEL_TOKEN）
+        # pdf-reconstruct 的转换逻辑全部委托给私有包 kame-officetools，
+        # 且本仓库 code 在模块层 import 它；缺了会直接收集失败而不是 skip，
+        # 所以这里必须真装，不能靠"降级可见"绕过。
+        env:
+          KERNEL_TOKEN: ${{ secrets.KAMELAB_KERNEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KERNEL_TOKEN}" ]; then
+            echo "::error::缺少 secrets.KAMELAB_KERNEL_TOKEN —— 后端测试依赖私有内核仓库 Sergget/kame-officetools。请在 Settings → Secrets and variables → Actions 添加一个对该仓库有读权限的 PAT。"
+            exit 1
+          fi
+          echo "::add-mask::${KERNEL_TOKEN}"
+          python -m pip install \
+            "git+https://${KERNEL_TOKEN}@github.com/Sergget/kame-officetools.git@main"
+          python -c "import kame_officetools as m; print('kernel', m.__version__)"
+
+      - name: pytest
+        working-directory: backend
+        run: python -m pytest -q
+
+  frontend:
+    name: 前端构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 构建
+        # 注意（见 AGENTS.md）：本仓库没有 vue-tsc，vite build 不会因模板里
+        # 引用了未定义变量而失败。"构建通过"只证明能打包，不证明页面能跑。
+        working-directory: frontend
+        run: npm run build

@@ -68,6 +68,14 @@ jobs:
         working-directory: backend
         run: python -m pytest -q
 
+      - name: 确认 secrets 未被提交
+        # 判别逻辑在 scripts/check-secrets.py（与工作区同名脚本同源）：
+        # 占位符与变量引用（c.env.X / process.env.X）放行，
+        # 命中只回报键名与值长度，不回显值。
+        run: |
+          set -euo pipefail
+          python scripts/check-secrets.py --audit
+
   frontend:
     name: 前端构建
     runs-on: ubuntu-latest

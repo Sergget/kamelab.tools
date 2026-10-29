@@ -66,7 +66,15 @@ jobs:
 
       - name: pytest
         working-directory: backend
-        run: python -m pytest -q
+        run: |
+          set -euo pipefail
+          # app/main.py 只在 config.STATIC_DIR 存在时才注册 SPA 回落路由
+          # （`if config.STATIC_DIR.exists():`）。生产部署时前端构建产物一定
+          # 在那里，路由必然注册；CI 没有前端产物，所以这里先建目录——
+          # 让测试面对的是"与生产一致"的路由注册状态。
+          mkdir -p backend/app/static
+          cd backend
+          python -m pytest -q
 
       - name: 确认 secrets 未被提交
         # 判别逻辑在 scripts/check-secrets.py（与工作区同名脚本同源）：

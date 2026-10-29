@@ -72,8 +72,11 @@ jobs:
           # （`if config.STATIC_DIR.exists():`）。生产部署时前端构建产物一定
           # 在那里，路由必然注册；CI 没有前端产物，所以这里先建目录——
           # 让测试面对的是"与生产一致"的路由注册状态。
-          mkdir -p backend/app/static
-          cd backend
+          #
+          # 注意：本步骤的 working-directory 已经是 backend/，所以路径是
+          # app/static 而不是 backend/app/static（写错会静默地让 pytest
+          # 在不存在的目录里跑，报 "no tests ran"）。
+          mkdir -p app/static
           python -m pytest -q
 
       - name: 确认 secrets 未被提交
